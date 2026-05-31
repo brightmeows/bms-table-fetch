@@ -15,7 +15,7 @@ use tokio::fs;
 use url::Url;
 
 use bms_table_mirror::{
-    config::{load_table_config, AddTableInfo, TableConfig},
+    config::table::{load_table_config, TableEntry, TableConfig},
     filesystem::{deep_sort_json_value, is_changed, sanitize_filename},
     logger::init_logger,
 };
@@ -25,12 +25,16 @@ use bms_table_mirror::{
 #[command(version, about)]
 struct Cli {
     /// Path to configuration file (for add/replace/disable rules)
-    #[arg(long, default_value = "config/tables.toml")]
-    config: String,
+    #[arg(long, default_value = "config/table.toml")]
+    config: PathBuf,
 
-    /// Only process specific index files (comma-separated, without .json extension)
-    #[arg(long, value_delimiter = ',')]
-    index: Vec<String>,
+    /// Directory containing index JSON files
+    #[arg(long, default_value = "data/indexes")]
+    index_dir: PathBuf,
+
+    /// Only process specific index files by name (comma-separated, without .json extension)
+    #[arg(long = "index-names", value_delimiter = ',')]
+    index_names: Vec<String>,
 }
 
 #[tokio::main]
@@ -40,7 +44,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // ── Step 1: Read all index files ──────────────────────────
-    let indexes_dir = Path::new("data/indexes");
+    let indexes_dir = &cli.index_dir;
     let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
 
     if !fs::try_exists(indexes_dir).await.unwrap_or(false) {
@@ -53,13 +57,13 @@ async fn main() -> Result<()> {
                 continue;
             }
 
-            // If --index is specified, skip files not in the list
-            if !cli.index.is_empty() {
+            // If --index-names is specified, skip files not in the list
+            if !cli.index_names.is_empty() {
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("");
-                if !cli.index.contains(&stem.to_string()) {
+                if !cli.index_names.contains(&stem.to_string()) {
                     continue;
                 }
             }
@@ -104,8 +108,8 @@ async fn main() -> Result<()> {
 
     if let Some(ref cfg) = config {
         // Add extra tables
-        for item in &cfg.add_table {
-            let copied: BmsTableInfo = AddTableInfo {
+        for item in &cfg.table {
+            let copied: BmsTableInfo = TableEntry {
                 name: item.name.clone(),
                 url: item.url.clone(),
                 symbol: item.symbol.clone(),
@@ -116,7 +120,7 @@ async fn main() -> Result<()> {
         }
 
         // Replace specified table URLs
-        for rule in &cfg.replace_table_url {
+        for rule in &cfg.replace {
             // Try exact key match first
             if let Some(mut info) = table_info_map.remove(&rule.from) {
                 info.url = rule.to.clone();
@@ -157,7 +161,8 @@ async fn main() -> Result<()> {
         }
 
         // Disable specified table URLs
-        for url in &cfg.disable_table_url {
+        for entry in &cfg.disable {
+            let url = &entry.url;
             if table_info_map.remove(url).is_some() {
                 info!("Disabled table: {}", url);
             }

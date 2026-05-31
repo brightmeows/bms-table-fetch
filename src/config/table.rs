@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use bms_table::BmsTableInfo;
 use serde::{Deserialize, Serialize};
@@ -7,13 +6,13 @@ use serde_json::Value;
 use url::Url;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TableListSource {
-    pub name: String,
-    pub url: Url,
+pub struct ReplaceRule {
+    pub from: Url,
+    pub to: Url,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AddTableInfo {
+pub struct TableEntry {
     #[serde(default)]
     pub name: String,
     pub url: Url,
@@ -23,8 +22,8 @@ pub struct AddTableInfo {
     pub extra: BTreeMap<String, Value>,
 }
 
-impl From<AddTableInfo> for BmsTableInfo {
-    fn from(v: AddTableInfo) -> Self {
+impl From<TableEntry> for BmsTableInfo {
+    fn from(v: TableEntry) -> Self {
         Self {
             name: v.name,
             url: v.url,
@@ -34,7 +33,7 @@ impl From<AddTableInfo> for BmsTableInfo {
     }
 }
 
-impl From<BmsTableInfo> for AddTableInfo {
+impl From<BmsTableInfo> for TableEntry {
     fn from(v: BmsTableInfo) -> Self {
         Self {
             name: v.name,
@@ -46,20 +45,18 @@ impl From<BmsTableInfo> for AddTableInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UrlReplaceRule {
-    pub from: Url,
-    pub to: Url,
+pub struct DisableEntry {
+    pub url: Url,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TableConfig {
-    pub table_list: Vec<TableListSource>,
     #[serde(default)]
-    pub add_table: Vec<AddTableInfo>,
+    pub table: Vec<TableEntry>,
     #[serde(default)]
-    pub disable_table_url: Vec<Url>,
+    pub disable: Vec<DisableEntry>,
     #[serde(default)]
-    pub replace_table_url: Vec<UrlReplaceRule>,
+    pub replace: Vec<ReplaceRule>,
 }
 
 pub async fn load_table_config<P: AsRef<Path>>(path: P) -> anyhow::Result<TableConfig> {

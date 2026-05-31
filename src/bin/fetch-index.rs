@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use bms_table::{BmsTableInfo, fetch::reqwest::Fetcher};
@@ -6,7 +6,7 @@ use clap::Parser;
 use log::info;
 use tokio::fs;
 
-use bms_table_mirror::config::load_table_config;
+use bms_table_mirror::config::index::load_index_config;
 use bms_table_mirror::logger::init_logger;
 
 /// Fetch table indexes from configured sources and save as unified JSON.
@@ -14,8 +14,8 @@ use bms_table_mirror::logger::init_logger;
 #[command(version, about)]
 struct Cli {
     /// Path to configuration file
-    #[arg(long, default_value = "config/tables.toml")]
-    config: String,
+    #[arg(long, default_value = "config/index.toml")]
+    config: PathBuf,
 }
 
 #[tokio::main]
@@ -24,14 +24,14 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let config = load_table_config(&cli.config).await?;
+    let config = load_index_config(&cli.config).await?;
 
     let indexes_dir = Path::new("data/indexes");
     fs::create_dir_all(indexes_dir).await?;
 
     let fetcher = Fetcher::lenient()?;
 
-    for idx in &config.table_list {
+    for idx in &config.source {
         info!("Fetching table index from: {} ({})", idx.name, idx.url);
         let fetched_list = fetcher.fetch_table_list(idx.url.as_str()).await?;
         let infos: Vec<BmsTableInfo> = fetched_list.tables;
