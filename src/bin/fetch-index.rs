@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use bms_table::{BmsTableInfo, fetch::reqwest::Fetcher};
@@ -16,6 +16,10 @@ struct Cli {
     /// Path to configuration file
     #[arg(long, default_value = "config/index.toml")]
     config: PathBuf,
+
+    /// Output directory for index JSON files
+    #[arg(long, default_value = "data/indexes")]
+    output_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -26,7 +30,7 @@ async fn main() -> Result<()> {
 
     let config = load_index_config(&cli.config).await?;
 
-    let indexes_dir = Path::new("data/indexes");
+    let indexes_dir = &cli.output_dir;
     fs::create_dir_all(indexes_dir).await?;
 
     let fetcher = Fetcher::lenient()?;

@@ -35,6 +35,10 @@ struct Cli {
     /// Only process specific index files by name (comma-separated, without .json extension)
     #[arg(long = "index-names", value_delimiter = ',')]
     index_names: Vec<String>,
+
+    /// Output directory for table data
+    #[arg(long, default_value = "data/tables")]
+    output_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -175,7 +179,7 @@ async fn main() -> Result<()> {
     );
 
     // ── Step 3: Fetch each table concurrently ─────────────────
-    let base_dir = Path::new("data/tables");
+    let base_dir = &cli.output_dir;
     fs::create_dir_all(base_dir).await?;
 
     let mut join_set = tokio::task::JoinSet::new();
