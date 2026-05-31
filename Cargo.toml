@@ -6,6 +6,18 @@ license = "Apache-2.0"
 homepage = "https://github.com/MiyakoMeow/bms-table-mirror"
 description = ""
 
+[lib]
+name = "bms_table_mirror"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fetch-index"
+path = "src/bin/fetch-index.rs"
+
+[[bin]]
+name = "fetch-tables"
+path = "src/bin/fetch-tables.rs"
+
 [dependencies]
 bms-table = "0.12"
 reqwest = "0.13"
@@ -16,6 +28,7 @@ log = "0.4"
 anyhow = "1"
 url = { version = "2", features = ["serde"] }
 
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = "1.1"
