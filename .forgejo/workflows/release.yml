@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: codeberg-small
+    runs-on: codeberg-medium
     steps:
       - name: Checkout
         uses: actions/checkout@v5
