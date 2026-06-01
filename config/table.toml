@@ -7,79 +7,69 @@ url = "https://pmsdifficulty.xxxxxxxx.jp/subtable/randomselect/randomselect.html
 # Ereter DP推定表
 [[table]]
 url = "https://bmstable.iidx.org/ereter-dpbms-easy-clear"
-[table.tag]
-order = "2"
-primary = "DP"
-secondary = "Personal"
+tag_order = "2"
+tag1 = "DP"
+tag2 = "Personal"
 
 [[table]]
 url = "https://bmstable.iidx.org/ereter-dpbms-hard-clear"
-[table.tag]
-order = "2"
-primary = "DP"
-secondary = "Personal"
+tag_order = "2"
+tag1 = "DP"
+tag2 = "Personal"
 
 # AI难易度表
 [[table]]
 url = "https://bms.hexlataia.xyz/tables/ai-full.html"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Personal"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Personal"
 
 [[table]]
 url = "https://bms.hexlataia.xyz/tables/ai.html"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Personal"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Personal"
 
 [[table]]
 url = "https://bms.hexlataia.xyz/tables/ai-lite.html"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Personal"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Personal"
 
 # Witchart 难度表（魔joy）（魔女个人表）
 [[table]]
 url = "https://mplwtch.github.io/witchart/"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Self-made Chart Only"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Self-made Chart Only"
 
 # ぴｃにｃ　aRea（AYhaz PMS难度表）
 [[table]]
 url = "https://yaritaihoudie.fr/table_picnicarea.html"
-[table.tag]
-order = "3"
-primary = "PMS"
-secondary = "Self-made Chart Only"
+tag_order = "3"
+tag1 = "PMS"
+tag2 = "Self-made Chart Only"
 
 # MiKaDo个人难度表
 [[table]]
 url = "https://mikado573.github.io/table.html"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Self-made Chart Only"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Self-made Chart Only"
 
 # 連打絡み難易度表
 [[table]]
 url = "https://lets-go-time-hell.github.io/mini-jack/"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Personal"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Personal"
 
 # みんな仲良く難易度表
 [[table]]
 url = "https://auno653.github.io/minnanakayoku/"
-[table.tag]
-order = "1"
-primary = "SP"
-secondary = "Personal"
+tag_order = "1"
+tag1 = "SP"
+tag2 = "Personal"
 
 # URL 替换规则（将旧地址替换为新地址）
 [[replace]]
