@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://github.com/MiyakoMeow/bms-table-mirror"
-description = ""
+description = "Fetch BMS table indexes and table data from remote sources"
 
 [lib]
 name = "bms_table_fetch"

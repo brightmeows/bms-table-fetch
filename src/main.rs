@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::Result;
@@ -225,22 +226,11 @@ async fn run_tables(args: &TablesArgs) -> Result<()> {
                 warn!("URL to replace not found: {}", rule.from);
                 continue;
             };
-            if let Some(mut info) = table_info_map.remove(&old_key) {
-                info.url = rule.to.clone();
-                table_info_map.insert(rule.to.clone(), info);
-                info!("Replaced similar URL: {} -> {}", old_key, rule.to);
-            } else {
-                table_info_map.insert(
-                    rule.to.clone(),
-                    BmsTableInfo {
-                        name: rule.to.domain().unwrap_or("unknown").to_string(),
-                        url: rule.to.clone(),
-                        symbol: "-".to_string(),
-                        extra: Default::default(),
-                    },
-                );
-                info!("Old table not found, added new table: {}", rule.to);
-            }
+            // Unwrap is safe: old_key was found in the map above
+            let mut info = table_info_map.remove(&old_key).unwrap();
+            info.url = rule.to.clone();
+            table_info_map.insert(rule.to.clone(), info);
+            info!("Replaced similar URL: {} -> {}", old_key, rule.to);
         }
 
         // Disable specified table URLs
@@ -261,9 +251,10 @@ async fn run_tables(args: &TablesArgs) -> Result<()> {
     let base_dir = &args.output_dir;
     fs::create_dir_all(base_dir).await?;
 
+    let fetcher = Arc::new(Fetcher::lenient()?);
     let mut join_set = tokio::task::JoinSet::new();
     for info in table_info_map.into_values() {
-        spawn_fetch(&mut join_set, info, base_dir)?;
+        spawn_fetch(&mut join_set, Arc::clone(&fetcher), info, base_dir);
     }
 
     while let Some(_res) = join_set.join_next().await {}
@@ -274,13 +265,13 @@ async fn run_tables(args: &TablesArgs) -> Result<()> {
 
 fn spawn_fetch(
     join_set: &mut tokio::task::JoinSet<()>,
+    fetcher: Arc<Fetcher>,
     info: BmsTableInfo,
     base_dir: &Path,
-) -> Result<()> {
+) {
     let url = info.url.clone();
     let name = info.name.clone();
     let base_dir_owned = base_dir.to_path_buf();
-    let fetcher = Fetcher::lenient()?;
 
     join_set.spawn(async move {
         if let Err(e) = fetch_and_save_table(&fetcher, info, base_dir_owned.as_path()).await {
@@ -297,8 +288,6 @@ fn spawn_fetch(
             info!("Saved table {} from {}", name, url);
         }
     });
-
-    Ok(())
 }
 
 async fn fetch_and_save_table(
