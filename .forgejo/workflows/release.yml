@@ -12,6 +12,9 @@ jobs:
         env:
           GIT_DEFAULT_HASH: sha256
 
+      - name: Install Rust Toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
       - name: Rust Cache
         uses: https://github.com/Swatinem/rust-cache@v2
 
