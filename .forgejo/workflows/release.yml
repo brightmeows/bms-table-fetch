@@ -1,0 +1,35 @@
+name: Release Build
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: codeberg-small
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        env:
+          GIT_DEFAULT_HASH: sha256
+
+      - name: Rust Cache
+        uses: https://github.com/Swatinem/rust-cache@v2
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Package Artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/bms-table-fetch dist/
+          tar -cJf "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
+            -C dist bms-table-fetch
+          sha256sum "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
+            > "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz.sha256"
+
+      - name: Upload Release Assets
+        uses: https://code.forgejo.org/actions/forgejo-release@v2
+        with:
+          direction: upload
+          token: "${{ forge.token }}"
+          release-dir: dist/
