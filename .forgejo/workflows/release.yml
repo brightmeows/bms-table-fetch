@@ -31,8 +31,33 @@ jobs:
             > "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz.sha256"
 
       - name: Upload Release Assets
-        uses: https://code.forgejo.org/actions/forgejo-release@v2
-        with:
-          direction: upload
-          token: "${{ forge.token }}"
-          release-dir: dist/
+        env:
+          FORGEJO_TOKEN: "${{ forge.token }}"
+          FORGEJO_API_URL: "${{ forge.api_url }}"
+          TAG: "${{ forge.ref_name }}"
+          REPO: "${{ forge.repository }}"
+        run: |
+          set -euo pipefail
+
+          # URL-encode tag for path (e.g. slashes in tag names)
+          TAG_URL=$(echo "$TAG" | sed 's/\//%2F/g')
+
+          echo "Looking up release for tag $TAG ..."
+          RELEASE_JSON=$(curl -sSf -H "Authorization: token $FORGEJO_TOKEN" \
+            "$FORGEJO_API_URL/repos/$REPO/releases/tags/$TAG_URL")
+
+          RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
+          echo "Found release ID: $RELEASE_ID"
+
+          for file in dist/*; do
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+            echo "Uploading $filename ..."
+            curl -sSf -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+              -H "Content-Type: multipart/form-data" \
+              -F "attachment=@$file" \
+              "$FORGEJO_API_URL/repos/$REPO/releases/$RELEASE_ID/assets?name=$filename" \
+              | jq .
+          done
+
+          echo "All assets uploaded successfully"
