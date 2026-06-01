@@ -1,8 +1,11 @@
 use std::path::Path;
 
 use log::warn;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+/// Replace characters invalid in filenames with full-width equivalents and collapse consecutive underscores.
+#[must_use]
 pub fn sanitize_filename(name: &str) -> String {
     // 将非法的非控制字符替换为对应的全角字符；控制字符替换为下划线
     let mapped: String = name
@@ -60,15 +63,15 @@ pub fn sanitize_filename(name: &str) -> String {
                 _ => replaced.push(ch),
             }
         }
-        format!("{}{}", prefix, replaced)
+        format!("{prefix}{replaced}")
     } else {
         s
     }
 }
 
-/// 递归排序 serde_json::Value：
-/// - 遇到数组：先对每个元素递归处理并调用 sort_all_objects，然后按字符串表示排序；
-/// - 遇到对象：先递归处理其值并调用 sort_all_objects，最后对当前对象执行 sort_all_objects；
+/// 递归排序 `serde_json::Value`：
+/// - 遇到数组：先对每个元素递归处理，然后按字符串表示排序；
+/// - 遇到对象：先递归处理其值，然后对当前 `Map` 的 key 排序；
 /// - 其他类型：不处理。
 pub fn deep_sort_json_value(value: &mut Value) {
     match value {
@@ -76,7 +79,7 @@ pub fn deep_sort_json_value(value: &mut Value) {
             // 排序数组元素
             arr.iter_mut().for_each(deep_sort_json_value);
             // 数组元素排序，确保比较稳定
-            arr.sort_by_key(|a| a.to_string());
+            arr.sort_by_key(std::string::ToString::to_string);
         }
         Value::Object(map) => {
             // 排序对象值
@@ -88,10 +91,6 @@ pub fn deep_sort_json_value(value: &mut Value) {
     }
 }
 
-/// 判断 JSON 文件内容是否与新的内容不同。
-/// 返回 `Ok(true)` 表示需要更新（文件不存在、读取/解析失败，或排序后不相等），否则返回 `Ok(false)`。
-use serde::de::DeserializeOwned;
-
 /// 判断 JSON 文件内容是否与新的内容不同，支持自定义预处理。
 ///
 /// - 读取旧文件与新内容，分别解析为 `T`；
@@ -99,6 +98,10 @@ use serde::de::DeserializeOwned;
 /// - 比较修改后的值是否不同。
 ///
 /// 返回 `Ok(true)` 表示需要更新（文件不存在、读取/解析失败，或预处理后不相等），否则返回 `Ok(false)`。
+///
+/// # Errors
+///
+/// Returns an error if `tokio::fs::try_exists` fails unexpectedly.
 pub async fn is_changed<T>(
     path: &Path,
     new_content: &str,
@@ -116,7 +119,7 @@ where
 
     // 读取旧文件内容失败，视为需要更新
     let Ok(old_str) = fs::read_to_string(path).await else {
-        warn!("旧文件 {:?} 读取失败，视为需要更新", path);
+        warn!("旧文件 {} 读取失败，视为需要更新", path.display());
         return Ok(true);
     };
 
@@ -126,7 +129,7 @@ where
 
     // 任一解析失败，视为需要更新
     let Ok(mut old_val) = old_parsed else {
-        warn!("旧文件 {:?} 解析失败，视为需要更新", path);
+        warn!("旧文件 {} 解析失败，视为需要更新", path.display());
         return Ok(true);
     };
     let Ok(mut new_val) = new_parsed else {

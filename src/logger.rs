@@ -1,5 +1,6 @@
 use std::{fs, io::Write, sync::Mutex};
 
+/// A logger that writes to console via `env_logger` and optionally logs `Warn`-level messages to a file.
 pub struct DualLogger {
     inner: env_logger::Logger,
     warn_file: Option<Mutex<fs::File>>, // 仅记录 warn 级别到文件
@@ -40,6 +41,7 @@ impl log::Log for DualLogger {
     }
 }
 
+/// Initialise the global logger with console output (filtered by `RUST_LOG`) and an append-only `warnings.log` file.
 pub fn init_logger() {
     let inner =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
