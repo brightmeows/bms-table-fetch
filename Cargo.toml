@@ -1,5 +1,5 @@
 [package]
-name = "bms-table-mirror"
+name = "bms-table-fetch"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -7,16 +7,12 @@ homepage = "https://github.com/MiyakoMeow/bms-table-mirror"
 description = ""
 
 [lib]
-name = "bms_table_mirror"
+name = "bms_table_fetch"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fetch-index"
-path = "src/bin/fetch-index.rs"
-
-[[bin]]
-name = "fetch-tables"
-path = "src/bin/fetch-tables.rs"
+name = "bms-table-fetch"
+path = "src/main.rs"
 
 [dependencies]
 bms-table = "0.12"

@@ -8,22 +8,48 @@ use bms_table::{
     BmsTable, BmsTableData, BmsTableHeader, BmsTableInfo, BmsTableRaw,
     fetch::reqwest::Fetcher,
 };
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use log::{info, warn};
 use serde_json::Value;
 use tokio::fs;
 use url::Url;
 
-use bms_table_mirror::{
+use bms_table_fetch::{
+    config::index::load_index_config,
     config::table::{load_table_config, TableEntry, TableConfig},
     filesystem::{deep_sort_json_value, is_changed, sanitize_filename},
     logger::init_logger,
 };
 
-/// Fetch table header/data from index results.
+/// Fetch table indexes and/or table data from BMS table sources.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Fetch table indexes from configured sources and save as unified JSON.
+    Index(IndexArgs),
+    /// Fetch table header/data from index results.
+    Tables(TablesArgs),
+}
+
+#[derive(Args)]
+struct IndexArgs {
+    /// Path to configuration file
+    #[arg(long, default_value = "config/index.toml")]
+    config: PathBuf,
+
+    /// Output directory for index JSON files
+    #[arg(long, default_value = "data/indexes")]
+    output_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct TablesArgs {
     /// Path to configuration file (for add/replace/disable rules)
     #[arg(long, default_value = "config/table.toml")]
     config: PathBuf,
@@ -47,8 +73,61 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    match cli.command {
+        None => {
+            // No subcommand: run index then tables with defaults
+            run_index(&IndexArgs {
+                config: PathBuf::from("config/index.toml"),
+                output_dir: PathBuf::from("data/indexes"),
+            })
+            .await?;
+
+            run_tables(&TablesArgs {
+                config: PathBuf::from("config/table.toml"),
+                index_dir: PathBuf::from("data/indexes"),
+                index_names: vec![],
+                output_dir: PathBuf::from("data/tables"),
+            })
+            .await?;
+        }
+        Some(Command::Index(args)) => {
+            run_index(&args).await?;
+        }
+        Some(Command::Tables(args)) => {
+            run_tables(&args).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_index(args: &IndexArgs) -> Result<()> {
+    let config = load_index_config(&args.config).await?;
+
+    let indexes_dir = &args.output_dir;
+    fs::create_dir_all(indexes_dir).await?;
+
+    let fetcher = Fetcher::lenient()?;
+
+    for idx in &config.source {
+        info!("Fetching table index from: {} ({})", idx.name, idx.url);
+        let fetched_list = fetcher.fetch_table_list(idx.url.as_str()).await?;
+        let infos: Vec<BmsTableInfo> = fetched_list.tables;
+
+        let file_path = indexes_dir.join(format!("{}.json", idx.name));
+        let serialized = serde_json::to_string_pretty(&infos)?;
+        fs::write(file_path, serialized).await?;
+
+        info!("Saved {} tables from {}", infos.len(), idx.name);
+    }
+
+    info!("Index fetch completed.");
+    Ok(())
+}
+
+async fn run_tables(args: &TablesArgs) -> Result<()> {
     // ── Step 1: Read all index files ──────────────────────────
-    let indexes_dir = &cli.index_dir;
+    let indexes_dir = &args.index_dir;
     let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
 
     if !fs::try_exists(indexes_dir).await.unwrap_or(false) {
@@ -62,12 +141,12 @@ async fn main() -> Result<()> {
             }
 
             // If --index-names is specified, skip files not in the list
-            if !cli.index_names.is_empty() {
+            if !args.index_names.is_empty() {
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("");
-                if !cli.index_names.contains(&stem.to_string()) {
+                if !args.index_names.contains(&stem.to_string()) {
                     continue;
                 }
             }
@@ -99,12 +178,12 @@ async fn main() -> Result<()> {
     );
 
     // ── Step 2: Load config and apply add/replace/disable ────
-    let config: Option<TableConfig> = match load_table_config(&cli.config).await {
+    let config: Option<TableConfig> = match load_table_config(&args.config).await {
         Ok(cfg) => Some(cfg),
         Err(e) => {
             warn!(
                 "Failed to load config {:?}: {} — skipping add/replace/disable rules",
-                cli.config, e
+                args.config, e
             );
             None
         }
@@ -179,7 +258,7 @@ async fn main() -> Result<()> {
     );
 
     // ── Step 3: Fetch each table concurrently ─────────────────
-    let base_dir = &cli.output_dir;
+    let base_dir = &args.output_dir;
     fs::create_dir_all(base_dir).await?;
 
     let mut join_set = tokio::task::JoinSet::new();

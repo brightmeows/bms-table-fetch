@@ -122,7 +122,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bms-table-mirror"
+name = "bms-table-fetch"
 version = "0.1.0"
 dependencies = [
  "anyhow",
