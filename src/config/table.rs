@@ -1,3 +1,5 @@
+//! Configuration types for the table pipeline: replacement rules, add/disable rules, and loading.
+
 use std::{collections::BTreeMap, path::Path};
 
 use bms_table::BmsTableInfo;

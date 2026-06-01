@@ -1,3 +1,5 @@
+//! Filesystem utilities: filename sanitisation, JSON sorting, change detection.
+
 use std::path::Path;
 
 use log::warn;

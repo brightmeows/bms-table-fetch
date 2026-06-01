@@ -1,3 +1,5 @@
+//! Configuration types for the list pipeline: source definitions and loading.
+
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};

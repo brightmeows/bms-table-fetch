@@ -1,3 +1,5 @@
+//! Fetch table lists from configured sources and write them to disk.
+
 use std::path::PathBuf;
 
 use anyhow::Result;

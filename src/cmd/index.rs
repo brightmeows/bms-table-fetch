@@ -1,3 +1,5 @@
+//! Build and write inverted indexes (title/artist/md5/sha256) from fetched table data.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},

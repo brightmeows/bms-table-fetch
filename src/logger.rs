@@ -1,3 +1,5 @@
+//! Dual logger that writes to console and optionally logs `Warn`-level messages to a file.
+
 use std::{fs, io::Write, sync::Mutex};
 
 /// A logger that writes to console via `env_logger` and optionally logs `Warn`-level messages to a file.

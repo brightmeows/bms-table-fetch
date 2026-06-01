@@ -1,3 +1,5 @@
+//! Fetch table headers and data from list results, applying add/replace/disable rules.
+
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

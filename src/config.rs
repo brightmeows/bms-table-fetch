@@ -1,4 +1,4 @@
-/// Configuration for the list pipeline (table sources to fetch).
+//! Configuration types for list and table data pipelines.
+
 pub mod list;
-/// Configuration for the table pipeline (add/replace/disable rules).
 pub mod table;
