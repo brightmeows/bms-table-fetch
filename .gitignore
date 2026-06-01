@@ -18,3 +18,6 @@ venv/
 # 数据目录（由bms-table-mirror仓库存储）
 /lists
 /tables
+
+# 索引目录（由 index 子命令生成）
+/indexes

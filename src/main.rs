@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -36,6 +36,8 @@ enum Command {
     List(ListArgs),
     /// Fetch table header/data from list results.
     Tables(TablesArgs),
+    /// Build lookup indexes (title/artist/md5/sha256 -> table names) from fetched table data.
+    Index(IndexArgs),
 }
 
 #[derive(Args)]
@@ -46,6 +48,17 @@ struct ListArgs {
 
     /// Output directory for list JSON files
     #[arg(long, default_value = "lists")]
+    output_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct IndexArgs {
+    /// Directory containing fetched table data
+    #[arg(long, default_value = "tables")]
+    table_dir: PathBuf,
+
+    /// Output directory for index JSON files
+    #[arg(long, default_value = "indexes")]
     output_dir: PathBuf,
 }
 
@@ -76,7 +89,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand: run list then tables with defaults
+            // No subcommand: run list then tables then index with defaults
             run_list(&ListArgs {
                 config: PathBuf::from("config/list.toml"),
                 output_dir: PathBuf::from("lists"),
@@ -90,12 +103,21 @@ async fn main() -> Result<()> {
                 output_dir: PathBuf::from("tables"),
             })
             .await?;
+
+            run_index(&IndexArgs {
+                table_dir: PathBuf::from("tables"),
+                output_dir: PathBuf::from("indexes"),
+            })
+            .await?;
         }
         Some(Command::List(args)) => {
             run_list(&args).await?;
         }
         Some(Command::Tables(args)) => {
             run_tables(&args).await?;
+        }
+        Some(Command::Index(args)) => {
+            run_index(&args).await?;
         }
     }
 
@@ -261,6 +283,203 @@ async fn run_tables(args: &TablesArgs) -> Result<()> {
 
     info!("All table fetch tasks finished.");
     Ok(())
+}
+
+async fn run_index(args: &IndexArgs) -> Result<()> {
+    let (title_map, artist_map, md5_map, sha256_map) =
+        build_index_from_tables(&args.table_dir).await?;
+
+    fs::create_dir_all(&args.output_dir).await?;
+
+    let output = &args.output_dir;
+
+    let data: [(&str, &BTreeMap<String, Vec<String>>); 4] = [
+        ("title.json", &title_map),
+        ("artist.json", &artist_map),
+        ("md5.json", &md5_map),
+        ("sha256.json", &sha256_map),
+    ];
+
+    for (filename, map) in data {
+        let path = output.join(filename);
+        let serialized = serde_json::to_string_pretty(map)?;
+        fs::write(&path, &serialized).await?;
+        info!("Wrote index: {:?} ({} entries)", path, map.len());
+    }
+
+    info!("Index build completed.");
+    Ok(())
+}
+
+/// Build inverted indexes from fetched table data.
+///
+/// For each table directory under `table_dir`, reads `data.json` and builds
+/// maps from (title / artist / md5 / sha256) to the set of table directory names
+/// that contain a matching entry.
+async fn build_index_from_tables(
+    table_dir: &Path,
+) -> Result<(
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+)> {
+    let mut title_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut artist_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut md5_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut sha256_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    match fs::try_exists(table_dir).await {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!("Table directory {:?} does not exist — building empty index", table_dir);
+            return Ok(convert_sets_to_vecs(title_map, artist_map, md5_map, sha256_map));
+        }
+        Err(e) => {
+            warn!("Failed to check table directory {:?}: {} — building empty index", table_dir, e);
+            return Ok(convert_sets_to_vecs(title_map, artist_map, md5_map, sha256_map));
+        }
+    }
+
+    let mut dir_entries = fs::read_dir(table_dir).await?;
+    while let Some(entry) = dir_entries.next_entry().await? {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let table_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        let data_path = path.join("data.json");
+        let content = match fs::read_to_string(&data_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to read {:?} (table: {}): {}", data_path, table_name, e);
+                continue;
+            }
+        };
+
+        let items: Vec<Value> = match extract_chart_items(&content) {
+            Some(v) => v,
+            None => {
+                warn!(
+                    "data.json format unrecognized in {:?} (table: {}): expected array or object with charts array",
+                    data_path, table_name
+                );
+                continue;
+            }
+        };
+
+        for item in &items {
+            maybe_insert(&mut title_map, item, "title", &table_name);
+            maybe_insert(&mut artist_map, item, "artist", &table_name);
+            maybe_insert_hash(&mut md5_map, item, "md5", 32, &table_name);
+            maybe_insert_hash(&mut sha256_map, item, "sha256", 64, &table_name);
+        }
+    }
+
+    Ok(convert_sets_to_vecs(title_map, artist_map, md5_map, sha256_map))
+}
+
+/// Parse `content` as a JSON array of chart entries, supporting two formats:
+/// - Plain array: `[...]`
+/// - Object with array field: `{"charts": [...]}` or `{"data": [...]}`
+fn extract_chart_items(content: &str) -> Option<Vec<Value>> {
+    // Fast path: plain array
+    if let Ok(v) = serde_json::from_str::<Vec<Value>>(content) {
+        return Some(v);
+    }
+
+    // Fallback: object with a container key
+    let root: Value = serde_json::from_str(content).ok()?;
+    let obj = root.as_object()?;
+    for key in &["charts", "data", "songs"] {
+        if let Some(arr) = obj.get(*key).and_then(|v| v.as_array()) {
+            return Some(arr.clone());
+        }
+    }
+    None
+}
+
+/// If `item[key]` is a non-empty string, insert `value` into the map under that key.
+fn maybe_insert(
+    map: &mut BTreeMap<String, BTreeSet<String>>,
+    item: &Value,
+    key: &str,
+    value: &str,
+) {
+    if let Some(s) = item
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        map.entry(s.to_string()).or_default().insert(value.to_string());
+    }
+}
+
+/// Insert a validated hash value into the index map.
+///
+/// Only accepts hex strings of exactly `expected_len` characters.
+/// If the string is hex but longer than `expected_len`, warns and skips.
+/// Non-hex or wrong-length strings are silently skipped.
+fn maybe_insert_hash(
+    map: &mut BTreeMap<String, BTreeSet<String>>,
+    item: &Value,
+    key: &str,
+    expected_len: usize,
+    table_name: &str,
+) {
+    let raw = match item.get(key).and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s,
+        _ => return,
+    };
+
+    let is_all_hex = raw.chars().all(|c| c.is_ascii_hexdigit());
+
+    if raw.len() == expected_len && is_all_hex {
+        map.entry(raw.to_string())
+            .or_default()
+            .insert(table_name.to_string());
+    } else if raw.len() > expected_len && is_all_hex {
+        let truncated = if raw.len() > 64 {
+            format!("{}… ({} chars total)", &raw[..64], raw.len())
+        } else {
+            raw.to_string()
+        };
+        warn!(
+            "Suspiciously long {} hash (expected {}) in table {}: {}",
+            key, expected_len, table_name, truncated,
+        );
+    }
+    // Otherwise silently skip (non-hex garbage, too short, etc.)
+}
+
+/// Convert BTreeSet values to sorted Vec for JSON serialization.
+fn convert_sets_to_vecs(
+    title_map: BTreeMap<String, BTreeSet<String>>,
+    artist_map: BTreeMap<String, BTreeSet<String>>,
+    md5_map: BTreeMap<String, BTreeSet<String>>,
+    sha256_map: BTreeMap<String, BTreeSet<String>>,
+) -> (
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+) {
+    let to_vec = |m: BTreeMap<String, BTreeSet<String>>| {
+        m.into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect::<Vec<_>>()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    (
+        to_vec(title_map),
+        to_vec(artist_map),
+        to_vec(md5_map),
+        to_vec(sha256_map),
+    )
 }
 
 fn spawn_fetch(
