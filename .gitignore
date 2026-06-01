@@ -16,4 +16,5 @@ venv/
 /.worktrees
 
 # 数据目录（由bms-table-mirror仓库存储）
-/data
+/lists
+/tables

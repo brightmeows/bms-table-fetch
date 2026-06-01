@@ -10,12 +10,12 @@ pub struct Source {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct IndexConfig {
+pub struct ListConfig {
     pub source: Vec<Source>,
 }
 
-pub async fn load_index_config<P: AsRef<Path>>(path: P) -> anyhow::Result<IndexConfig> {
+pub async fn load_list_config<P: AsRef<Path>>(path: P) -> anyhow::Result<ListConfig> {
     let content = tokio::fs::read_to_string(path).await?;
-    let cfg: IndexConfig = toml::from_str(&content)?;
+    let cfg: ListConfig = toml::from_str(&content)?;
     Ok(cfg)
 }

@@ -16,13 +16,13 @@ use tokio::fs;
 use url::Url;
 
 use bms_table_fetch::{
-    config::index::load_index_config,
+    config::list::load_list_config,
     config::table::{load_table_config, TableEntry, TableConfig},
     filesystem::{deep_sort_json_value, is_changed, sanitize_filename},
     logger::init_logger,
 };
 
-/// Fetch table indexes and/or table data from BMS table sources.
+/// Fetch table lists and/or table data from BMS table sources.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
@@ -32,20 +32,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Fetch table indexes from configured sources and save as unified JSON.
-    Index(IndexArgs),
-    /// Fetch table header/data from index results.
+    /// Fetch table lists from configured sources and save as unified JSON.
+    List(ListArgs),
+    /// Fetch table header/data from list results.
     Tables(TablesArgs),
 }
 
 #[derive(Args)]
-struct IndexArgs {
+struct ListArgs {
     /// Path to configuration file
-    #[arg(long, default_value = "config/index.toml")]
+    #[arg(long, default_value = "config/list.toml")]
     config: PathBuf,
 
-    /// Output directory for index JSON files
-    #[arg(long, default_value = "data/indexes")]
+    /// Output directory for list JSON files
+    #[arg(long, default_value = "lists")]
     output_dir: PathBuf,
 }
 
@@ -55,16 +55,16 @@ struct TablesArgs {
     #[arg(long, default_value = "config/table.toml")]
     config: PathBuf,
 
-    /// Directory containing index JSON files
-    #[arg(long, default_value = "data/indexes")]
-    index_dir: PathBuf,
+    /// Directory containing list JSON files
+    #[arg(long, default_value = "lists")]
+    list_dir: PathBuf,
 
-    /// Only process specific index files by name (comma-separated, without .json extension)
-    #[arg(long = "index-names", value_delimiter = ',')]
-    index_names: Vec<String>,
+    /// Only process specific list files by name (comma-separated, without .json extension)
+    #[arg(long = "list-names", value_delimiter = ',')]
+    list_names: Vec<String>,
 
     /// Output directory for table data
-    #[arg(long, default_value = "data/tables")]
+    #[arg(long, default_value = "tables")]
     output_dir: PathBuf,
 }
 
@@ -76,23 +76,23 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand: run index then tables with defaults
-            run_index(&IndexArgs {
-                config: PathBuf::from("config/index.toml"),
-                output_dir: PathBuf::from("data/indexes"),
+            // No subcommand: run list then tables with defaults
+            run_list(&ListArgs {
+                config: PathBuf::from("config/list.toml"),
+                output_dir: PathBuf::from("lists"),
             })
             .await?;
 
             run_tables(&TablesArgs {
                 config: PathBuf::from("config/table.toml"),
-                index_dir: PathBuf::from("data/indexes"),
-                index_names: vec![],
-                output_dir: PathBuf::from("data/tables"),
+                list_dir: PathBuf::from("lists"),
+                list_names: vec![],
+                output_dir: PathBuf::from("tables"),
             })
             .await?;
         }
-        Some(Command::Index(args)) => {
-            run_index(&args).await?;
+        Some(Command::List(args)) => {
+            run_list(&args).await?;
         }
         Some(Command::Tables(args)) => {
             run_tables(&args).await?;
@@ -102,57 +102,57 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_index(args: &IndexArgs) -> Result<()> {
-    let config = load_index_config(&args.config).await?;
+async fn run_list(args: &ListArgs) -> Result<()> {
+    let config = load_list_config(&args.config).await?;
 
-    let indexes_dir = &args.output_dir;
-    fs::create_dir_all(indexes_dir).await?;
+    let lists_dir = &args.output_dir;
+    fs::create_dir_all(lists_dir).await?;
 
     let fetcher = Fetcher::lenient()?;
 
     for idx in &config.source {
-        info!("Fetching table index from: {} ({})", idx.name, idx.url);
+        info!("Fetching table list from: {} ({})", idx.name, idx.url);
         let fetched_list = fetcher.fetch_table_list(idx.url.as_str()).await?;
         let infos: Vec<BmsTableInfo> = fetched_list.tables;
 
-        let file_path = indexes_dir.join(format!("{}.json", idx.name));
+        let file_path = lists_dir.join(format!("{}.json", idx.name));
         let serialized = serde_json::to_string_pretty(&infos)?;
         fs::write(file_path, serialized).await?;
 
         info!("Saved {} tables from {}", infos.len(), idx.name);
     }
 
-    info!("Index fetch completed.");
+    info!("List fetch completed.");
     Ok(())
 }
 
 async fn run_tables(args: &TablesArgs) -> Result<()> {
-    // ── Step 1: Read all index files ──────────────────────────
-    let indexes_dir = &args.index_dir;
+    // ── Step 1: Read all list files ───────────────────────────
+    let lists_dir = &args.list_dir;
     let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
 
-    if !fs::try_exists(indexes_dir).await.unwrap_or(false) {
-        warn!("Index directory {:?} does not exist", indexes_dir);
+    if !fs::try_exists(lists_dir).await.unwrap_or(false) {
+        warn!("List directory {:?} does not exist", lists_dir);
     } else {
-        let mut entries = fs::read_dir(indexes_dir).await?;
+        let mut entries = fs::read_dir(lists_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
 
-            // If --index-names is specified, skip files not in the list
-            if !args.index_names.is_empty() {
+            // If --list-names is specified, skip files not in the list
+            if !args.list_names.is_empty() {
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("");
-                if !args.index_names.contains(&stem.to_string()) {
+                if !args.list_names.contains(&stem.to_string()) {
                     continue;
                 }
             }
 
-            info!("Loading index file: {:?}", path);
+            info!("Loading list file: {:?}", path);
             let content = match fs::read_to_string(&path).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -174,7 +174,7 @@ async fn run_tables(args: &TablesArgs) -> Result<()> {
     }
 
     info!(
-        "Loaded {} tables from index files",
+        "Loaded {} tables from list files",
         table_info_map.len()
     );
 
