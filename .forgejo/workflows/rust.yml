@@ -1,0 +1,37 @@
+name: Rust
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  clippy:
+    runs-on: codeberg-small
+    steps:
+      - uses: actions/checkout@v5
+        env:
+          GIT_DEFAULT_HASH: sha256
+
+      - name: Install Rust Toolchain
+        id: rust
+        uses: https://codeberg.org/wackbyte/rust-toolchain@trunk
+        with:
+          toolchain: stable
+          profile: minimal
+          components: clippy
+
+      - name: Rust Cache
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.rust.outputs.cachekey }}
+          restore-keys: |
+            clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            clippy-${{ runner.os }}-
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
