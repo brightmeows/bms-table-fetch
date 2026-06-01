@@ -13,10 +13,23 @@ jobs:
           GIT_DEFAULT_HASH: sha256
 
       - name: Install Rust Toolchain
-        uses: https://github.com/dtolnay/rust-toolchain@stable
+        id: rust
+        uses: https://codeberg.org/wackbyte/rust-toolchain@trunk
+        with:
+          toolchain: stable
+          profile: minimal
 
       - name: Rust Cache
-        uses: https://github.com/Swatinem/rust-cache@v2
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.rust.outputs.cachekey }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            rust-${{ runner.os }}-
 
       - name: Build Release Binary
         run: cargo build --release
