@@ -62,7 +62,7 @@ jobs:
           RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
           echo "Found release ID: $RELEASE_ID"
 
-          for file in dist/*; do
+          for file in dist/bms-table-fetch-*; do
             [ -f "$file" ] || continue
             filename=$(basename "$file")
             echo "Uploading $filename ..."
