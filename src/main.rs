@@ -3,6 +3,7 @@
 use anyhow::Result;
 use bms_table_fetch::cmd::{
     self, index::Args as IndexArgs, list::Args as ListArgs, tables::Args as TablesArgs,
+    tables_list::Args as TablesListArgs,
 };
 use clap::{Parser, Subcommand};
 use log::info;
@@ -23,6 +24,8 @@ enum Command {
     Tables(TablesArgs),
     /// Build lookup indexes (title/artist/md5/sha256 -> table names) from fetched table data.
     Index(IndexArgs),
+    /// Generate a combined table list from fetched table info.json files.
+    TablesList(TablesListArgs),
 }
 
 #[tokio::main]
@@ -48,6 +51,12 @@ async fn main() -> Result<()> {
             })
             .await?;
 
+            cmd::tables_list::run_tables_list(&TablesListArgs {
+                table_dir: "tables".into(),
+                output: "tables/tables.json".into(),
+            })
+            .await?;
+
             cmd::index::run_index(&IndexArgs {
                 table_dir: "tables".into(),
                 output_dir: "indexes".into(),
@@ -62,6 +71,9 @@ async fn main() -> Result<()> {
         }
         Some(Command::Index(args)) => {
             cmd::index::run_index(&args).await?;
+        }
+        Some(Command::TablesList(args)) => {
+            cmd::tables_list::run_tables_list(&args).await?;
         }
     }
 
