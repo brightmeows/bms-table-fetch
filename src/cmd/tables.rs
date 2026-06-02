@@ -1,4 +1,4 @@
-//! Fetch table headers and data from list results, applying add/replace/disable rules.
+//! Fetch table headers and data, layering existing tables, list results, then add/replace/disable rules.
 
 use std::{
     collections::BTreeMap,
@@ -40,16 +40,29 @@ pub struct Args {
     pub output_dir: PathBuf,
 }
 
-/// Fetch table header/data from list results.
+/// Fetch table header/data, layering existing tables, list results, then add/replace/disable rules.
+///
+/// The table info map is built in three layers (last wins):
+/// 1. **Base** — existing tables: read `info.json` from each subdirectory under `output_dir`.
+/// 2. **Overlay** — list results: entries from list JSON files override base entries by URL.
+/// 3. **Override** — `table.toml` rules: add new entries, replace URLs, disable entries.
 ///
 /// # Errors
 ///
 /// Returns an error if reading list files, loading the config, or fetching table data fails.
 pub async fn run_tables(args: &Args) -> Result<()> {
-    // ── Step 1: Read all list files ───────────────────────────
-    let mut table_info_map = load_list_files(&args.list_dir, &args.list_names).await?;
+    // ── Step 1: Load existing tables as the base layer ───────
+    let mut table_info_map = load_existing_table_infos(&args.output_dir).await?;
 
-    // ── Step 2: Load config and apply add/replace/disable ────
+    // ── Step 2: Override with list files (layer 2) ──────────
+    let list_map = load_list_files(&args.list_dir, &args.list_names).await?;
+    let list_count = list_map.len();
+    if !list_map.is_empty() {
+        table_info_map.extend(list_map);
+        info!("Overlaid {list_count} entries from list files");
+    }
+
+    // ── Step 3: Load config and apply add/replace/disable ────
     let config: Option<TableConfig> = match load_table_config(&args.config).await {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -65,12 +78,9 @@ pub async fn run_tables(args: &Args) -> Result<()> {
         apply_config(&mut table_info_map, cfg);
     }
 
-    info!(
-        "Total tables to fetch after processing: {}",
-        table_info_map.len()
-    );
+    info!("Total tables after processing: {}", table_info_map.len());
 
-    // ── Step 3: Fetch each table concurrently ─────────────────
+    // ── Step 4: Fetch each table concurrently ────────────────
     let base_dir = &args.output_dir;
     fs::create_dir_all(base_dir).await?;
 
@@ -148,6 +158,61 @@ async fn load_list_files(
     }
 
     info!("Loaded {} tables from list files", table_info_map.len());
+    Ok(table_info_map)
+}
+
+/// Read `info.json` from every subdirectory under `table_dir` to build the base layer.
+///
+/// Returns an empty map if the directory does not exist (first run).
+async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, BmsTableInfo>> {
+    let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
+
+    match fs::try_exists(table_dir).await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!(
+                "Table directory {} does not exist — starting with empty base",
+                table_dir.display(),
+            );
+            return Ok(table_info_map);
+        }
+        Err(e) => {
+            warn!(
+                "Failed to check table directory {}: {e} — starting with empty base",
+                table_dir.display(),
+            );
+            return Ok(table_info_map);
+        }
+    }
+
+    let mut entries = fs::read_dir(table_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let info_path = path.join("info.json");
+        let Ok(content) = fs::read_to_string(&info_path).await else {
+            continue; // no info.json → not a fetched table directory
+        };
+
+        let info: BmsTableInfo = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Failed to parse {}: {e}", info_path.display());
+                continue;
+            }
+        };
+
+        table_info_map.insert(info.url.clone(), info);
+    }
+
+    info!(
+        "Loaded {} existing tables from {}",
+        table_info_map.len(),
+        table_dir.display(),
+    );
     Ok(table_info_map)
 }
 
