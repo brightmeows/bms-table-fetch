@@ -320,8 +320,46 @@ async fn fetch_and_save_table(
     ));
     let out_dir = base_dir.join(dir_name);
 
-    // Patch header to point to "data.json" instead of original data_url
-    let patched_header = header_raw.replace(&header.data_url, "data.json");
+    // Patch header to point to "./data.json" instead of original data_url.
+    // Locates "data_url" key and its JSON string value via safe methods
+    // (.find, .get, .bytes().position(), .char_indices()) so it works even
+    // when the serializer escapes "/" as "\/" (plain string matching of
+    // the parsed value would fail in that case).
+    let patched_header = {
+        let mut result = header_raw.clone();
+        let key_len = br#""data_url""#.len();
+
+        if let Some(key_pos) = header_raw.find(r#""data_url""#)
+            && let Some(tail) = header_raw.get(key_pos + key_len..)
+            && let Some(colon) = tail.bytes().position(|b| b == b':')
+            && let Some(after_colon) = header_raw.get(key_pos + key_len + colon + 1..)
+            && let Some(quote) = after_colon.bytes().position(|b| b == b'"')
+            && let Some(content) =
+                header_raw.get(key_pos + key_len + colon + 1 + quote + 1..)
+        {
+            let content_start = key_pos + key_len + colon + 1 + quote + 1;
+
+            // find unescaped closing quote via char iteration
+            let mut content_end = None;
+            let mut chars = content.char_indices();
+            while let Some((off, ch)) = chars.next() {
+                if ch == '\\' {
+                    chars.next(); // skip escaped character
+                    continue;
+                }
+                if ch == '"' {
+                    content_end = Some(off);
+                    break;
+                }
+            }
+
+            if let Some(end) = content_end {
+                result.replace_range(content_start..content_start + end, "./data.json");
+            }
+        }
+
+        result
+    };
 
     fs::create_dir_all(&out_dir).await?;
     let header_path: PathBuf = out_dir.join("header.json");
