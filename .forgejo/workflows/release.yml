@@ -12,6 +12,17 @@ jobs:
         env:
           GIT_DEFAULT_HASH: sha256
 
+      # Toolchain cache: always-save ensures latest stable is always cached.
+      # Primary key is unique per run (always miss) → restore-keys provides
+      # the actual restore, and save runs at job end regardless.
+      - name: Cache Rust Toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.rustup
+          key: rustup-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            rustup-${{ runner.os }}-
+
       - name: Install Rust Toolchain
         id: rust
         uses: https://codeberg.org/wackbyte/rust-toolchain@trunk
@@ -19,7 +30,7 @@ jobs:
           toolchain: stable
           profile: minimal
 
-      - name: Rust Cache
+      - name: Rust Cache (cargo registry & build artifacts)
         uses: actions/cache@v4
         with:
           path: |
