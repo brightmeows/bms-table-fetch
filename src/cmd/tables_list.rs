@@ -32,14 +32,17 @@ pub struct Args {
 
 /// Read all `info.json` files from `table_dir` and write them as a combined JSON array.
 ///
-/// The output is sorted by table URL for deterministic ordering.
+/// The output is sorted by table URL for deterministic ordering. If the output file already
+/// exists and its content differs from the newly loaded entries, the file is overwritten
+/// and a detailed diff is logged. Otherwise, the write is skipped.
 ///
 /// # Errors
 ///
 /// Returns an error if writing the output file fails.
 pub async fn run_tables_list(args: &Args) -> Result<()> {
     let table_infos = load_all_table_infos(&args.table_dir).await?;
-    info!("Loaded {} table info entries", table_infos.len());
+    let new_count = table_infos.len();
+    info!("Loaded {new_count} table info entries");
 
     let serialized = serde_json::to_string_pretty(&table_infos)?;
 
@@ -47,17 +50,115 @@ pub async fn run_tables_list(args: &Args) -> Result<()> {
         fs::create_dir_all(parent).await?;
     }
 
-    if is_changed::<Value>(&args.output, &serialized, deep_sort_json_value).await? {
-        fs::write(&args.output, &serialized).await?;
-        info!("Wrote combined table list: {}", args.output.display());
-    } else {
-        info!(
-            "Combined table list unchanged — skipped write: {}",
-            args.output.display()
-        );
+    // Load existing file for diff reporting
+    let old_infos: Option<Vec<BmsTableInfo>> = fs::read_to_string(&args.output)
+        .await
+        .ok()
+        .as_deref()
+        .and_then(|c| serde_json::from_str(c).ok());
+
+    let needs_update = is_changed::<Value>(&args.output, &serialized, deep_sort_json_value).await?;
+
+    match (&old_infos, needs_update) {
+        (Some(old), true) => {
+            let old_count = old.len();
+            let diff = compute_table_diff(old, &table_infos);
+            let changes = format_changes_summary(
+                diff.added.len(),
+                diff.removed.len(),
+                diff.modified.len(),
+            );
+
+            warn!(
+                "tables.json was out of sync — regenerated ({changes}, {old_count} → {new_count} entries)"
+            );
+
+            for entry in &diff.added {
+                info!("  + Added: {}", display_entry_name(entry));
+            }
+            for entry in &diff.removed {
+                info!("  - Removed: {}", display_entry_name(entry));
+            }
+            for entry in &diff.modified {
+                info!("  ~ Modified: {}", display_entry_name(entry));
+            }
+
+            fs::write(&args.output, &serialized).await?;
+            info!("Wrote combined table list: {}", args.output.display());
+        }
+        (None, true) => {
+            warn!("tables.json was missing or corrupt — regenerated ({new_count} entries)");
+            fs::write(&args.output, &serialized).await?;
+            info!("Wrote combined table list: {}", args.output.display());
+        }
+        (_, false) => {
+            info!(
+                "tables.json is consistent with tables/ ({new_count} entries) — no update needed"
+            );
+        }
     }
 
     Ok(())
+}
+
+/// The result of comparing two sets of [`BmsTableInfo`] entries, keyed by URL.
+struct TableDiff {
+    /// Entries present in the new set but not in the old set.
+    added: Vec<BmsTableInfo>,
+    /// Entries present in the old set but not in the new set.
+    removed: Vec<BmsTableInfo>,
+    /// Entries present in both sets but with changed content (by [`PartialEq`]).
+    modified: Vec<BmsTableInfo>,
+}
+
+/// Compare old and new table info lists, returning the categorized differences.
+///
+/// Entries are identified by their URL. An entry is considered modified if any field
+/// (including `extra`) differs between the old and new version.
+fn compute_table_diff(old: &[BmsTableInfo], new: &[BmsTableInfo]) -> TableDiff {
+    let old_by_url: BTreeMap<&Url, &BmsTableInfo> = old.iter().map(|e| (&e.url, e)).collect();
+    let new_by_url: BTreeMap<&Url, &BmsTableInfo> = new.iter().map(|e| (&e.url, e)).collect();
+
+    let mut added = Vec::new();
+    let mut modified = Vec::new();
+
+    for (url, new_entry) in &new_by_url {
+        match old_by_url.get(url) {
+            None => added.push((*new_entry).clone()),
+            Some(old_entry) if **old_entry != **new_entry => modified.push((*new_entry).clone()),
+            Some(_) => {}
+        }
+    }
+
+    let removed: Vec<BmsTableInfo> = old
+        .iter()
+        .filter(|e| !new_by_url.contains_key(&e.url))
+        .cloned()
+        .collect();
+
+    TableDiff { added, removed, modified }
+}
+
+/// Format a human-readable changes summary like `+3/-0/~1`.
+fn format_changes_summary(added: usize, removed: usize, modified: usize) -> String {
+    [
+        if added > 0 { Some(format!("+{added}")) } else { None },
+        if removed > 0 { Some(format!("-{removed}")) } else { None },
+        if modified > 0 { Some(format!("~{modified}")) } else { None },
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("/")
+}
+
+/// Return the display name for a table entry, falling back to URL if name is empty.
+fn display_entry_name(info: &BmsTableInfo) -> String {
+    if info.name.is_empty() {
+        info.url.to_string()
+    } else {
+        info.name.clone()
+    }
 }
 
 /// Read `info.json` from every subdirectory under `table_dir` and return them as a `Vec`,
