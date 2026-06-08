@@ -2,7 +2,8 @@
 
 use anyhow::Result;
 use bms_table_fetch::cmd::{
-    self, index::Args as IndexArgs, list::Args as ListArgs, tables::Args as TablesArgs,
+    self, cleanup::Args as CleanupArgs, index::Args as IndexArgs, list::Args as ListArgs,
+    reconcile::Args as ReconcileArgs, tables::Args as TablesArgs,
     tables_list::Args as TablesListArgs,
 };
 use clap::{Parser, Subcommand};
@@ -22,6 +23,10 @@ enum Command {
     List(ListArgs),
     /// Fetch table header/data from list results.
     Tables(TablesArgs),
+    /// Fix directory name mismatches with table info (rename to match info.json).
+    Reconcile(ReconcileArgs),
+    /// Move orphaned table directories (no longer in any list) to _orphaned/.
+    Cleanup(CleanupArgs),
     /// Build lookup indexes (title/artist/md5/sha256 -> table names) from fetched table data.
     Index(IndexArgs),
     /// Generate a combined table list from fetched table info.json files.
@@ -36,10 +41,15 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand: run list then tables then index with defaults
+            // No subcommand: run full pipeline with defaults
             cmd::list::run_list(&ListArgs {
                 config: "config/list.toml".into(),
                 output_dir: "lists".into(),
+            })
+            .await?;
+
+            cmd::reconcile::run_reconcile(&ReconcileArgs {
+                table_dir: "tables".into(),
             })
             .await?;
 
@@ -48,6 +58,14 @@ async fn main() -> Result<()> {
                 list_dir: "lists".into(),
                 list_names: vec![],
                 output_dir: "tables".into(),
+            })
+            .await?;
+
+            cmd::cleanup::run_cleanup(&CleanupArgs {
+                config: "config/table.toml".into(),
+                list_dir: "lists".into(),
+                list_names: vec![],
+                table_dir: "tables".into(),
             })
             .await?;
 
@@ -68,6 +86,12 @@ async fn main() -> Result<()> {
         }
         Some(Command::Tables(args)) => {
             cmd::tables::run_tables(&args).await?;
+        }
+        Some(Command::Reconcile(args)) => {
+            cmd::reconcile::run_reconcile(&args).await?;
+        }
+        Some(Command::Cleanup(args)) => {
+            cmd::cleanup::run_cleanup(&args).await?;
         }
         Some(Command::Index(args)) => {
             cmd::index::run_index(&args).await?;

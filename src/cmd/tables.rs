@@ -1,7 +1,7 @@
 //! Fetch table headers and data, layering existing tables, list results, then add/replace/disable rules.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -51,10 +51,11 @@ pub struct Args {
 ///
 /// Returns an error if reading list files, loading the config, or fetching table data fails.
 pub async fn run_tables(args: &Args) -> Result<()> {
-    // ── Step 1: Load existing tables as the base layer ───────
-    let mut table_info_map = load_existing_table_infos(&args.output_dir).await?;
+    // ── Phase 1: Load existing tables as the base layer ───────
+    let (mut table_info_map, old_dir_map) =
+        load_existing_table_infos(&args.output_dir).await?;
 
-    // ── Step 2: Override with list files (layer 2) ──────────
+    // ── Phase 2: Override with list files (layer 2) ──────────
     let list_map = load_list_files(&args.list_dir, &args.list_names).await?;
     let list_count = list_map.len();
     if !list_map.is_empty() {
@@ -62,7 +63,7 @@ pub async fn run_tables(args: &Args) -> Result<()> {
         info!("Overlaid {list_count} entries from list files");
     }
 
-    // ── Step 3: Load config and apply add/replace/disable ────
+    // ── Phase 3: Load config and apply add/replace/disable ────
     let config: Option<TableConfig> = match load_table_config(&args.config).await {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -80,14 +81,15 @@ pub async fn run_tables(args: &Args) -> Result<()> {
 
     info!("Total tables after processing: {}", table_info_map.len());
 
-    // ── Step 4: Fetch each table concurrently ────────────────
+    // ── Phase 4: Fetch each table concurrently ────────────────
     let base_dir = &args.output_dir;
     fs::create_dir_all(base_dir).await?;
 
     let fetcher = Arc::new(Fetcher::lenient()?);
     let mut join_set = tokio::task::JoinSet::new();
-    for info in table_info_map.into_values() {
-        spawn_fetch(&mut join_set, Arc::clone(&fetcher), info, base_dir);
+    for (url, info) in table_info_map {
+        let old_dir: Option<String> = old_dir_map.get(&url).cloned();
+        spawn_fetch(&mut join_set, Arc::clone(&fetcher), info, base_dir, old_dir);
     }
 
     while let Some(result) = join_set.join_next().await {
@@ -101,7 +103,7 @@ pub async fn run_tables(args: &Args) -> Result<()> {
 }
 
 /// Read all JSON list files from `list_dir`, optionally filtered by `list_names`.
-async fn load_list_files(
+pub(crate) async fn load_list_files(
     list_dir: &Path,
     list_names: &[String],
 ) -> Result<BTreeMap<Url, BmsTableInfo>> {
@@ -163,9 +165,18 @@ async fn load_list_files(
 
 /// Read `info.json` from every subdirectory under `table_dir` to build the base layer.
 ///
+/// Returns a tuple of (`info_map`, `old_dir_map`) where `old_dir_map` maps each URL to the
+/// actual directory name on disk (for detecting name changes on re-fetch).
+///
 /// Returns an empty map if the directory does not exist (first run).
-async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, BmsTableInfo>> {
+pub(crate) async fn load_existing_table_infos(
+    table_dir: &Path,
+) -> Result<(
+    BTreeMap<Url, BmsTableInfo>,
+    HashMap<Url, String>,
+)> {
     let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
+    let mut old_dir_map: HashMap<Url, String> = HashMap::new();
 
     match fs::try_exists(table_dir).await {
         Ok(true) => {}
@@ -174,14 +185,14 @@ async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, Bms
                 "Table directory {} does not exist — starting with empty base",
                 table_dir.display(),
             );
-            return Ok(table_info_map);
+            return Ok((table_info_map, old_dir_map));
         }
         Err(e) => {
             warn!(
                 "Failed to check table directory {}: {e} — starting with empty base",
                 table_dir.display(),
             );
-            return Ok(table_info_map);
+            return Ok((table_info_map, old_dir_map));
         }
     }
 
@@ -189,6 +200,16 @@ async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, Bms
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        // Skip the _orphaned/ directory itself
+        if dir_name == "_orphaned" {
             continue;
         }
 
@@ -205,6 +226,7 @@ async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, Bms
             }
         };
 
+        old_dir_map.insert(info.url.clone(), dir_name);
         table_info_map.insert(info.url.clone(), info);
     }
 
@@ -213,11 +235,14 @@ async fn load_existing_table_infos(table_dir: &Path) -> Result<BTreeMap<Url, Bms
         table_info_map.len(),
         table_dir.display(),
     );
-    Ok(table_info_map)
+    Ok((table_info_map, old_dir_map))
 }
 
 /// Apply add/replace/disable rules from `config` to `table_info_map` in place.
-fn apply_config(table_info_map: &mut BTreeMap<Url, BmsTableInfo>, config: &TableConfig) {
+pub(crate) fn apply_config(
+    table_info_map: &mut BTreeMap<Url, BmsTableInfo>,
+    config: &TableConfig,
+) {
     // Add extra tables
     for item in &config.table {
         let copied: BmsTableInfo = TableEntry {
@@ -276,13 +301,16 @@ fn spawn_fetch(
     fetcher: Arc<Fetcher>,
     info: BmsTableInfo,
     base_dir: &Path,
+    old_dir_name: Option<String>,
 ) {
     let url = info.url.clone();
     let name = info.name.clone();
     let base_dir_owned = base_dir.to_path_buf();
 
     join_set.spawn(async move {
-        if let Err(e) = fetch_and_save_table(&fetcher, info, base_dir_owned.as_path()).await {
+        if let Err(e) =
+            fetch_and_save_table(&fetcher, info, base_dir_owned.as_path(), old_dir_name).await
+        {
             warn!(
                 "Failed to fetch {} from {} -> {}",
                 name,
@@ -302,6 +330,7 @@ async fn fetch_and_save_table(
     fetcher: &Fetcher,
     mut info: BmsTableInfo,
     base_dir: &Path,
+    old_dir_name: Option<String>,
 ) -> Result<()> {
     let response = fetcher.fetch_table(info.url.as_str()).await?;
     let BmsTable { header, data } = response.table;
@@ -318,7 +347,11 @@ async fn fetch_and_save_table(
         header_json_url.domain().unwrap_or("unknown.domain"),
         header.name
     ));
-    let out_dir = base_dir.join(dir_name);
+    let out_dir = base_dir.join(&dir_name);
+
+    // If the table existed under a different directory name (e.g. remote name changed),
+    // rename the old directory to the new name before writing.
+    maybe_rename_old_dir(base_dir, &dir_name, old_dir_name).await?;
 
     // Patch header to point to "./data.json" instead of original data_url.
     // Locates "data_url" key and its JSON string value via safe methods
@@ -408,6 +441,38 @@ async fn fetch_and_save_table(
     let info_data = serde_json::to_string_pretty(&info)?;
     if is_changed::<Value>(&info_path, &info_data, deep_sort_json_value).await? {
         fs::write(&info_path, &info_data).await?;
+    }
+
+    Ok(())
+}
+
+/// If the table existed under a different directory name previously (e.g., remote header name
+/// changed), rename the old directory to the new name. If both old and new directories exist,
+/// the stale old directory is removed.
+async fn maybe_rename_old_dir(
+    base_dir: &Path,
+    new_dir_name: &str,
+    old_dir_name: Option<String>,
+) -> Result<()> {
+    let Some(ref old_name) = old_dir_name else {
+        return Ok(());
+    };
+    if old_name == new_dir_name {
+        return Ok(());
+    }
+
+    let old_path = base_dir.join(old_name);
+    if !old_path.exists() {
+        return Ok(());
+    }
+
+    let new_path = base_dir.join(new_dir_name);
+    if new_path.exists() {
+        warn!("Removing stale directory {old_name} after name change (new: {new_dir_name})");
+        fs::remove_dir_all(&old_path).await?;
+    } else {
+        info!("Renaming directory {old_name} -> {new_dir_name} (table name changed)");
+        fs::rename(&old_path, &new_path).await?;
     }
 
     Ok(())

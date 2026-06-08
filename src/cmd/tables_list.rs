@@ -193,6 +193,16 @@ async fn load_all_table_infos(table_dir: &Path) -> Result<Vec<BmsTableInfo>> {
             continue;
         }
 
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        // Skip orphaned directories
+        if dir_name == "_orphaned" {
+            continue;
+        }
+
         let info_path = path.join("info.json");
         let content = match fs::read_to_string(&info_path).await {
             Ok(c) => c,
@@ -202,13 +212,16 @@ async fn load_all_table_infos(table_dir: &Path) -> Result<Vec<BmsTableInfo>> {
             }
         };
 
-        let info: BmsTableInfo = match serde_json::from_str(&content) {
+        let mut info: BmsTableInfo = match serde_json::from_str(&content) {
             Ok(v) => v,
             Err(e) => {
                 warn!("Failed to parse {}: {e} — skipping", info_path.display());
                 continue;
             }
         };
+
+        info.extra
+            .insert("dir_name".to_string(), Value::String(dir_name));
 
         map.insert(info.url.clone(), info);
     }
