@@ -103,6 +103,11 @@ async fn build_index_from_tables(
             None => continue,
         };
 
+        // Skip the orphaned directory
+        if table_name == "_orphaned" {
+            continue;
+        }
+
         let data_path = path.join("data.json");
         let content = match fs::read_to_string(&data_path).await {
             Ok(c) => c,

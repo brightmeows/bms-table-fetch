@@ -73,7 +73,7 @@ pub async fn run_cleanup(args: &Args) -> Result<()> {
     let active_urls: HashSet<Url> = active_map.into_keys().collect();
     info!("Active tables after loading: {}", active_urls.len());
 
-    // Phase 5: Cleanup orphans
+    // Phase 4: Cleanup orphans
     let moved = cleanup_orphans(base_dir, &active_urls).await?;
     if moved > 0 {
         info!("Moved {moved} orphaned director(ies) to _orphaned/");

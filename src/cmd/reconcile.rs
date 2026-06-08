@@ -44,6 +44,10 @@ pub async fn run_reconcile(args: &Args) -> Result<()> {
 /// Returns the number of directories renamed.
 async fn reconcile_directories(base_dir: &Path) -> Result<usize> {
     let Ok(mut entries) = fs::read_dir(base_dir).await else {
+        info!(
+            "Table directory {} does not exist — nothing to reconcile",
+            base_dir.display(),
+        );
         return Ok(0);
     };
 
