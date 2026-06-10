@@ -19,10 +19,7 @@ jobs:
 
       - name: Install Rust toolchain
         id: rust
-        uses: https://codeberg.org/brightmeows/rust-toolchain-action@v0.1.0
-        with:
-          toolchain: stable
-          profile: minimal
+        uses: https://codeberg.org/brightmeows/rust-toolchain-action@v0.2.0
 
       - name: Restore cargo cache
         uses: https://data.forgejo.org/actions/cache@v4
@@ -36,7 +33,7 @@ jobs:
             rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
             rust-${{ runner.os }}-
 
-      - name: Install release-plz
+      - name: Publish crates and create release
         run: |
           curl -fsSL \
             "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.158/release-plz-x86_64-unknown-linux-gnu.tar.gz" \
@@ -44,14 +41,8 @@ jobs:
           tar xzf /tmp/release-plz.tar.gz -C /tmp
           install /tmp/release-plz /usr/local/bin/ 2>/dev/null || \
             install /tmp/release-plz-*/release-plz /usr/local/bin/
-
-      - name: Configure git user
-        run: |
           git config --global user.name "BrightMeowS"
           git config --global user.email "brightmeows@163.com"
-
-      - name: Create release
-        run: |
           release-plz release \
             --forge gitea \
             --git-token "${{ secrets.GITHUB_TOKEN }}"
