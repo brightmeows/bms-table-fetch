@@ -14,11 +14,18 @@ cargo deny check               # 许可证见 deny.toml
 
 ## 默认流水线
 
-不带参数运行时按以下顺序执行六步：
+不带参数时由 `SyncEngine`（`src/sync.rs`）编排，分 4 阶段执行：
 
 ```
-list → tables → reconcile → cleanup → tables_list → index
+list → overlay → fetch → post_process
 ```
+
+各阶段职责：
+
+1. **list** — 拉取远程列表写入 `lists/*.json`（同 `list` 子命令）
+2. **overlay** — 一次性计算三层叠加（base + lists + config），确定 active 表集合
+3. **fetch** — 并发抓取所有 active 表（无并发上限——预期行为），写入 `tables/*/`
+4. **post_process** — 第二次扫描 `tables/`，顺序执行：rename 目录 → 移 orphan → 并行写 `tables/tables.json` + `indexes/*.json`
 
 数据流向：
 
@@ -26,14 +33,18 @@ list → tables → reconcile → cleanup → tables_list → index
 config/list.toml             → lists/*.json
 config/table.toml
   + lists/*.json
-  + tables/*/info.json (base) → tables/*/
-tables/*/info.json           → tables/tables.json
-tables/*/data.json           → indexes/*.json
+  + tables/*/info.json (base) → active_set → tables/*/
+tables/*/                     → tables/tables.json
+tables/*/                     → indexes/*.json
 ```
+
+### 与子命令的关系
+
+默认流水线通过 `SyncEngine` 一次性完成全部 4 阶段，期间只扫描 `tables/` 两次（overlay 阶段 + post_process 阶段）。6 个子命令（`list` / `tables` / `reconcile` / `cleanup` / `tables-list` / `index`）仍然可以作为独立入口使用，每个子命令自行扫描 `tables/`。
 
 ### 三层 overlay 模型
 
-`tables` 子命令的表集合按三层合并（后层覆盖前层）：
+表集合按三层合并（后层覆盖前层），由 `sync::build_active_set` 实现：
 
 1. **Base** — 磁盘已有表（读 `tables/*/info.json`）
 2. **Overlay** — 列表文件（`lists/*.json`）
@@ -44,8 +55,12 @@ tables/*/data.json           → indexes/*.json
 ## 约束
 
 - **全异步 IO**——`clippy.toml` 禁用 `std::fs::*` 和 `std::thread::spawn`，必须用 `tokio::fs` / `tokio::spawn`
-- **条件写入**——写文件前用 `filesystem::is_changed` 检测，跳过无变化的写入
-- **目录名**——须经 `sanitize_filename` 处理，确保跨平台合法
+- **条件写入**——写文件前用 `filesystem::is_changed` 检测，跳过无变化的写入（带字节比较快速路径，内容相同不解析 JSON）
+- **原子写入**——`filesystem::write_atomic` 先写 `.tmp` 再 `rename` 覆盖，崩溃不损坏目标文件
+- **`tables/` 扫描仅 2 次**——默认流水线中只在 overlay（读 `info.json` 做 base 层）和 post_process（读 `info.json` + `data.json`）时各扫描一次，不自发额外扫描
+- **并发抓取无限制**——`fetch` 阶段所有表同时发起 HTTP 请求（通过 `JoinSet`），不设并发上限。这是预期行为/项目决策
+- **reconcile 默认流水线中不做**——rename 在 `post_process` 中内联处理（`sync::compute_renames` + `execute_renames`）。`reconcile` 子命令仅手动调用时使用
+- **目录名**——须经 `sanitize_filename` 处理，确保跨平台合法；rename 后 `tables.json` 中的 `dir_name` 自动更新
 - **`_orphaned` 是保留名**——所有命令扫描时跳过此目录，不可用作表名
 - **`publish = false`**——不发布到 crates.io（见 `release-plz.toml`）
 
