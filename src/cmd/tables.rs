@@ -52,8 +52,7 @@ pub struct Args {
 /// Returns an error if reading list files, loading the config, or fetching table data fails.
 pub async fn run_tables(args: &Args) -> Result<()> {
     // ── Phase 1: Load existing tables as the base layer ───────
-    let (mut table_info_map, old_dir_map) =
-        load_existing_table_infos(&args.output_dir).await?;
+    let (mut table_info_map, mut old_dir_map) = load_existing_table_infos(&args.output_dir).await?;
 
     // ── Phase 2: Override with list files (layer 2) ──────────
     let list_map = load_list_files(&args.list_dir, &args.list_names).await?;
@@ -76,7 +75,7 @@ pub async fn run_tables(args: &Args) -> Result<()> {
     };
 
     if let Some(ref cfg) = config {
-        apply_config(&mut table_info_map, cfg);
+        apply_config(&mut table_info_map, cfg, Some(&mut old_dir_map));
     }
 
     info!("Total tables after processing: {}", table_info_map.len());
@@ -171,10 +170,7 @@ pub(crate) async fn load_list_files(
 /// Returns an empty map if the directory does not exist (first run).
 pub(crate) async fn load_existing_table_infos(
     table_dir: &Path,
-) -> Result<(
-    BTreeMap<Url, BmsTableInfo>,
-    HashMap<Url, String>,
-)> {
+) -> Result<(BTreeMap<Url, BmsTableInfo>, HashMap<Url, String>)> {
     let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
     let mut old_dir_map: HashMap<Url, String> = HashMap::new();
 
@@ -239,9 +235,13 @@ pub(crate) async fn load_existing_table_infos(
 }
 
 /// Apply add/replace/disable rules from `config` to `table_info_map` in place.
+///
+/// When `old_dir_map` is provided, URL replacement rules also migrate the corresponding
+/// directory name mapping so that subsequent rename logic can find the old directory.
 pub(crate) fn apply_config(
     table_info_map: &mut BTreeMap<Url, BmsTableInfo>,
     config: &TableConfig,
+    mut old_dir_map: Option<&mut HashMap<Url, String>>,
 ) {
     // Add extra tables
     for item in &config.table {
@@ -259,6 +259,11 @@ pub(crate) fn apply_config(
     for rule in &config.replace {
         // Try exact key match first
         if let Some(mut info) = table_info_map.remove(&rule.from) {
+            if let Some(ref mut dirs) = old_dir_map
+                && let Some(dir_name) = dirs.remove(&rule.from)
+            {
+                dirs.insert(rule.to.clone(), dir_name);
+            }
             info.url = rule.to.clone();
             table_info_map.insert(rule.to.clone(), info);
             info!("Replaced table URL: {} -> {}", rule.from, rule.to);
@@ -282,6 +287,11 @@ pub(crate) fn apply_config(
         let mut info = table_info_map
             .remove(&old_key)
             .unwrap_or_else(|| unreachable!("old_key verified present via let-else guard"));
+        if let Some(ref mut dirs) = old_dir_map
+            && let Some(dir_name) = dirs.remove(&old_key)
+        {
+            dirs.insert(rule.to.clone(), dir_name);
+        }
         info.url = rule.to.clone();
         table_info_map.insert(rule.to.clone(), info);
         info!("Replaced similar URL: {} -> {}", old_key, rule.to);
@@ -367,8 +377,7 @@ async fn fetch_and_save_table(
             && let Some(colon) = tail.bytes().position(|b| b == b':')
             && let Some(after_colon) = header_raw.get(key_pos + key_len + colon + 1..)
             && let Some(quote) = after_colon.bytes().position(|b| b == b'"')
-            && let Some(content) =
-                header_raw.get(key_pos + key_len + colon + 1 + quote + 1..)
+            && let Some(content) = header_raw.get(key_pos + key_len + colon + 1 + quote + 1..)
         {
             let content_start = key_pos + key_len + colon + 1 + quote + 1;
 

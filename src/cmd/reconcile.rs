@@ -102,9 +102,7 @@ async fn reconcile_directories(base_dir: &Path) -> Result<usize> {
 
         let expected_path = base_dir.join(&expected_dir_name);
         if expected_path.exists() {
-            warn!(
-                "Cannot rename {actual_dir_name} -> {expected_dir_name}: target already exists"
-            );
+            warn!("Cannot rename {actual_dir_name} -> {expected_dir_name}: target already exists");
             continue;
         }
 

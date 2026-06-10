@@ -63,11 +63,8 @@ pub async fn run_tables_list(args: &Args) -> Result<()> {
         (Some(old), true) => {
             let old_count = old.len();
             let diff = compute_table_diff(old, &table_infos);
-            let changes = format_changes_summary(
-                diff.added.len(),
-                diff.removed.len(),
-                diff.modified.len(),
-            );
+            let changes =
+                format_changes_summary(diff.added.len(), diff.removed.len(), diff.modified.len());
 
             warn!(
                 "tables.json was out of sync — regenerated ({changes}, {old_count} → {new_count} entries)"
@@ -136,15 +133,31 @@ fn compute_table_diff(old: &[BmsTableInfo], new: &[BmsTableInfo]) -> TableDiff {
         .cloned()
         .collect();
 
-    TableDiff { added, removed, modified }
+    TableDiff {
+        added,
+        removed,
+        modified,
+    }
 }
 
 /// Format a human-readable changes summary like `+3/-0/~1`.
 fn format_changes_summary(added: usize, removed: usize, modified: usize) -> String {
     [
-        if added > 0 { Some(format!("+{added}")) } else { None },
-        if removed > 0 { Some(format!("-{removed}")) } else { None },
-        if modified > 0 { Some(format!("~{modified}")) } else { None },
+        if added > 0 {
+            Some(format!("+{added}"))
+        } else {
+            None
+        },
+        if removed > 0 {
+            Some(format!("-{removed}"))
+        } else {
+            None
+        },
+        if modified > 0 {
+            Some(format!("~{modified}"))
+        } else {
+            None
+        },
     ]
     .into_iter()
     .flatten()

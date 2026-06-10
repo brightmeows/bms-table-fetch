@@ -48,16 +48,16 @@ async fn main() -> Result<()> {
             })
             .await?;
 
-            cmd::reconcile::run_reconcile(&ReconcileArgs {
-                table_dir: "tables".into(),
-            })
-            .await?;
-
             cmd::tables::run_tables(&TablesArgs {
                 config: "config/table.toml".into(),
                 list_dir: "lists".into(),
                 list_names: vec![],
                 output_dir: "tables".into(),
+            })
+            .await?;
+
+            cmd::reconcile::run_reconcile(&ReconcileArgs {
+                table_dir: "tables".into(),
             })
             .await?;
 

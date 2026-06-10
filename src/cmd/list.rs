@@ -5,9 +5,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use bms_table::{BmsTableInfo, fetch::reqwest::Fetcher};
 use log::info;
+use serde_json::Value;
 use tokio::fs;
 
-use crate::config::list::load_list_config;
+use crate::{
+    config::list::load_list_config,
+    filesystem::{deep_sort_json_value, is_changed},
+};
 
 /// CLI arguments for the list subcommand.
 #[derive(clap::Args)]
@@ -38,12 +42,19 @@ pub async fn run_list(args: &Args) -> Result<()> {
         info!("Fetching table list from: {} ({})", idx.name, idx.url);
         let fetched_list = fetcher.fetch_table_list(idx.url.as_str()).await?;
         let infos: Vec<BmsTableInfo> = fetched_list.tables;
+        let serialized = serde_json::to_string_pretty(&infos)?;
 
         let file_path = lists_dir.join(format!("{}.json", idx.name));
-        let serialized = serde_json::to_string_pretty(&infos)?;
-        fs::write(file_path, serialized).await?;
-
-        info!("Saved {} tables from {}", infos.len(), idx.name);
+        if is_changed::<Value>(&file_path, &serialized, deep_sort_json_value).await? {
+            fs::write(&file_path, &serialized).await?;
+            info!("Saved {} tables from {}", infos.len(), idx.name);
+        } else {
+            info!(
+                "{} tables from {} unchanged — skipping write",
+                infos.len(),
+                idx.name
+            );
+        }
     }
 
     info!("List fetch completed.");

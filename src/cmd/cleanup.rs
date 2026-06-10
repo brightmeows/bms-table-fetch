@@ -14,10 +14,7 @@ use log::{info, warn};
 use tokio::fs;
 use url::Url;
 
-use crate::{
-    cmd::tables,
-    config::table::load_table_config,
-};
+use crate::{cmd::tables, config::table::load_table_config};
 
 /// CLI arguments for the cleanup subcommand.
 #[derive(clap::Args)]
@@ -63,7 +60,7 @@ pub async fn run_cleanup(args: &Args) -> Result<()> {
 
     // Phase 3: Apply config
     match load_table_config(&args.config).await {
-        Ok(cfg) => tables::apply_config(&mut active_map, &cfg),
+        Ok(cfg) => tables::apply_config(&mut active_map, &cfg, None),
         Err(e) => warn!(
             "Failed to load config {}: {e} — skipping disable rules",
             args.config.display(),
@@ -91,10 +88,7 @@ pub async fn run_cleanup(args: &Args) -> Result<()> {
 /// Skips the `_orphaned/` directory itself.
 ///
 /// Returns the number of directories moved.
-pub(crate) async fn cleanup_orphans(
-    base_dir: &Path,
-    active_urls: &HashSet<Url>,
-) -> Result<usize> {
+pub(crate) async fn cleanup_orphans(base_dir: &Path, active_urls: &HashSet<Url>) -> Result<usize> {
     let Ok(mut entries) = fs::read_dir(base_dir).await else {
         return Ok(0);
     };
@@ -134,6 +128,11 @@ pub(crate) async fn cleanup_orphans(
         let destination = orphan_dir.join(&dir_name);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).await?;
+        }
+
+        // Remove stale orphan if it already exists
+        if destination.exists() {
+            fs::remove_dir_all(&destination).await?;
         }
 
         match fs::rename(&path, &destination).await {

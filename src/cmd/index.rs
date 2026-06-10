@@ -10,6 +10,8 @@ use log::{info, warn};
 use serde_json::Value;
 use tokio::fs;
 
+use crate::filesystem::{deep_sort_json_value, is_changed};
+
 /// Map from a lookup key (title, artist, md5, sha256) to the list of table directories containing it.
 type IndexMap = BTreeMap<String, Vec<String>>;
 
@@ -48,8 +50,16 @@ pub async fn run_index(args: &Args) -> Result<()> {
     for (filename, map) in data {
         let path = output.join(filename);
         let serialized = serde_json::to_string_pretty(map)?;
-        fs::write(&path, &serialized).await?;
-        info!("Wrote index: {} ({} entries)", path.display(), map.len());
+        if is_changed::<Value>(&path, &serialized, deep_sort_json_value).await? {
+            fs::write(&path, &serialized).await?;
+            info!("Wrote index: {} ({} entries)", path.display(), map.len());
+        } else {
+            info!(
+                "Index {} unchanged ({} entries) — skipping write",
+                path.display(),
+                map.len()
+            );
+        }
     }
 
     info!("Index build completed.");
