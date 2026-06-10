@@ -1,10 +1,13 @@
 //! CLI entry point for bms-table-fetch.
 
 use anyhow::Result;
-use bms_table_fetch::cmd::{
-    self, cleanup::Args as CleanupArgs, index::Args as IndexArgs, list::Args as ListArgs,
-    reconcile::Args as ReconcileArgs, tables::Args as TablesArgs,
-    tables_list::Args as TablesListArgs,
+use bms_table_fetch::{
+    cmd::{
+        self, cleanup::Args as CleanupArgs, index::Args as IndexArgs, list::Args as ListArgs,
+        reconcile::Args as ReconcileArgs, tables::Args as TablesArgs,
+        tables_list::Args as TablesListArgs,
+    },
+    sync::SyncEngine,
 };
 use clap::{Parser, Subcommand};
 use log::info;
@@ -41,44 +44,16 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand: run full pipeline with defaults
-            cmd::list::run_list(&ListArgs {
-                config: "config/list.toml".into(),
-                output_dir: "lists".into(),
-            })
-            .await?;
-
-            cmd::tables::run_tables(&TablesArgs {
-                config: "config/table.toml".into(),
-                list_dir: "lists".into(),
-                list_names: vec![],
-                output_dir: "tables".into(),
-            })
-            .await?;
-
-            cmd::reconcile::run_reconcile(&ReconcileArgs {
-                table_dir: "tables".into(),
-            })
-            .await?;
-
-            cmd::cleanup::run_cleanup(&CleanupArgs {
-                config: "config/table.toml".into(),
-                list_dir: "lists".into(),
-                list_names: vec![],
-                table_dir: "tables".into(),
-            })
-            .await?;
-
-            cmd::tables_list::run_tables_list(&TablesListArgs {
-                table_dir: "tables".into(),
-                output: "tables/tables.json".into(),
-            })
-            .await?;
-
-            cmd::index::run_index(&IndexArgs {
-                table_dir: "tables".into(),
-                output_dir: "indexes".into(),
-            })
+            // No subcommand: run full pipeline with defaults via SyncEngine
+            SyncEngine::new(
+                "config/list.toml".into(),
+                "config/table.toml".into(),
+                "lists".into(),
+                "tables".into(),
+                "indexes".into(),
+                vec![],   // list_names
+            )?
+            .run()
             .await?;
         }
         Some(Command::List(args)) => {

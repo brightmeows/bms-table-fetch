@@ -3,11 +3,10 @@
 //! This is the reverse of the list → tables flow: instead of consuming a list
 //! to fetch tables, it reads the actual `info.json` from every fetched table
 //! directory and writes them all as a single JSON array (same format as list files).
+//!
+//! Uses shared scan from `sync` module.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::Result;
 use bms_table::BmsTableInfo;
@@ -16,7 +15,10 @@ use serde_json::Value;
 use tokio::fs;
 use url::Url;
 
-use crate::filesystem::{deep_sort_json_value, is_changed};
+use crate::{
+    filesystem::{deep_sort_json_value, is_changed, write_atomic},
+    sync,
+};
 
 /// CLI arguments for the tables-list subcommand.
 #[derive(clap::Args)]
@@ -40,7 +42,19 @@ pub struct Args {
 ///
 /// Returns an error if writing the output file fails.
 pub async fn run_tables_list(args: &Args) -> Result<()> {
-    let table_infos = load_all_table_infos(&args.table_dir).await?;
+    let scan = sync::scan_tables(&args.table_dir).await?;
+
+    let table_infos: Vec<BmsTableInfo> = scan
+        .entries
+        .into_iter()
+        .map(|e| {
+            let mut info = e.info;
+            info.extra
+                .insert("dir_name".to_string(), Value::String(e.dir_name));
+            info
+        })
+        .collect();
+
     let new_count = table_infos.len();
     info!("Loaded {new_count} table info entries");
 
@@ -80,12 +94,12 @@ pub async fn run_tables_list(args: &Args) -> Result<()> {
                 info!("  ~ Modified: {}", display_entry_name(entry));
             }
 
-            fs::write(&args.output, &serialized).await?;
+            write_atomic(&args.output, &serialized).await?;
             info!("Wrote combined table list: {}", args.output.display());
         }
         (None, true) => {
             warn!("tables.json was missing or corrupt — regenerated ({new_count} entries)");
-            fs::write(&args.output, &serialized).await?;
+            write_atomic(&args.output, &serialized).await?;
             info!("Wrote combined table list: {}", args.output.display());
         }
         (_, false) => {
@@ -172,73 +186,4 @@ fn display_entry_name(info: &BmsTableInfo) -> String {
     } else {
         info.name.clone()
     }
-}
-
-/// Read `info.json` from every subdirectory under `table_dir` and return them as a `Vec`,
-/// sorted by URL for deterministic output.
-///
-/// Returns an empty vec if the directory does not exist.
-async fn load_all_table_infos(table_dir: &Path) -> Result<Vec<BmsTableInfo>> {
-    let mut map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
-
-    match fs::try_exists(table_dir).await {
-        Ok(true) => {}
-        Ok(false) => {
-            info!(
-                "Table directory {} does not exist — returning empty list",
-                table_dir.display(),
-            );
-            return Ok(Vec::new());
-        }
-        Err(e) => {
-            warn!(
-                "Failed to check table directory {}: {e} — returning empty list",
-                table_dir.display(),
-            );
-            return Ok(Vec::new());
-        }
-    }
-
-    let mut entries = fs::read_dir(table_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name.to_string(),
-            None => continue,
-        };
-
-        // Skip orphaned directories
-        if dir_name == "_orphaned" {
-            continue;
-        }
-
-        let info_path = path.join("info.json");
-        let content = match fs::read_to_string(&info_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to read {}: {e} — skipping", info_path.display());
-                continue;
-            }
-        };
-
-        let mut info: BmsTableInfo = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("Failed to parse {}: {e} — skipping", info_path.display());
-                continue;
-            }
-        };
-
-        info.extra
-            .insert("dir_name".to_string(), Value::String(dir_name));
-
-        map.insert(info.url.clone(), info);
-    }
-
-    // BTreeMap is sorted by key (URL), so iterating yields sorted order
-    Ok(map.into_values().collect())
 }

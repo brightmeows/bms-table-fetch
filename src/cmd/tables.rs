@@ -7,17 +7,15 @@ use std::{
 };
 
 use anyhow::Result;
-use bms_table::{
-    BmsTable, BmsTableData, BmsTableHeader, BmsTableInfo, BmsTableRaw, fetch::reqwest::Fetcher,
-};
+use bms_table::{BmsTableInfo, fetch::reqwest::Fetcher};
 use log::{info, warn};
-use serde_json::Value;
 use tokio::fs;
 use url::Url;
 
 use crate::{
     config::table::{TableConfig, TableEntry, load_table_config},
-    filesystem::{deep_sort_json_value, is_changed, sanitize_filename},
+    filesystem::clean_tmp_files,
+    sync,
 };
 
 /// CLI arguments for the tables subcommand.
@@ -50,7 +48,11 @@ pub struct Args {
 /// # Errors
 ///
 /// Returns an error if reading list files, loading the config, or fetching table data fails.
+///
 pub async fn run_tables(args: &Args) -> Result<()> {
+    // Clean any stale .tmp files before starting
+    clean_tmp_files(&args.output_dir).await.ok();
+
     // ── Phase 1: Load existing tables as the base layer ───────
     let (mut table_info_map, mut old_dir_map) = load_existing_table_infos(&args.output_dir).await?;
 
@@ -80,15 +82,33 @@ pub async fn run_tables(args: &Args) -> Result<()> {
 
     info!("Total tables after processing: {}", table_info_map.len());
 
-    // ── Phase 4: Fetch each table concurrently ────────────────
+    // ── Phase 4: Fetch each table concurrently (bounded) ──────
     let base_dir = &args.output_dir;
     fs::create_dir_all(base_dir).await?;
 
     let fetcher = Arc::new(Fetcher::lenient()?);
     let mut join_set = tokio::task::JoinSet::new();
     for (url, info) in table_info_map {
-        let old_dir: Option<String> = old_dir_map.get(&url).cloned();
-        spawn_fetch(&mut join_set, Arc::clone(&fetcher), info, base_dir, old_dir);
+        let fetcher = Arc::clone(&fetcher);
+        let base_dir = base_dir.clone();
+        let old_dir = old_dir_map.get(&url).cloned();
+        let name = info.name.clone();
+
+        join_set.spawn(async move {
+            if let Err(e) = sync::fetch_and_save_table(&fetcher, info, &base_dir, old_dir).await {
+                warn!(
+                    "Failed to fetch {} from {} -> {}",
+                    name,
+                    url,
+                    e.chain()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" -> ")
+                );
+            } else {
+                info!("Saved table {name} from {url}");
+            }
+        });
     }
 
     while let Some(result) = join_set.join_next().await {
@@ -194,10 +214,10 @@ pub(crate) async fn load_existing_table_infos(
 
     let mut entries = fs::read_dir(table_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if !path.is_dir() {
+        if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
             continue;
         }
+        let path = entry.path();
 
         let dir_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name.to_string(),
@@ -304,185 +324,4 @@ pub(crate) fn apply_config(
             info!("Disabled table: {url}");
         }
     }
-}
-
-fn spawn_fetch(
-    join_set: &mut tokio::task::JoinSet<()>,
-    fetcher: Arc<Fetcher>,
-    info: BmsTableInfo,
-    base_dir: &Path,
-    old_dir_name: Option<String>,
-) {
-    let url = info.url.clone();
-    let name = info.name.clone();
-    let base_dir_owned = base_dir.to_path_buf();
-
-    join_set.spawn(async move {
-        if let Err(e) =
-            fetch_and_save_table(&fetcher, info, base_dir_owned.as_path(), old_dir_name).await
-        {
-            warn!(
-                "Failed to fetch {} from {} -> {}",
-                name,
-                url,
-                e.chain()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            );
-        } else {
-            info!("Saved table {name} from {url}");
-        }
-    });
-}
-
-async fn fetch_and_save_table(
-    fetcher: &Fetcher,
-    mut info: BmsTableInfo,
-    base_dir: &Path,
-    old_dir_name: Option<String>,
-) -> Result<()> {
-    let response = fetcher.fetch_table(info.url.as_str()).await?;
-    let BmsTable { header, data } = response.table;
-    let BmsTableRaw {
-        header_raw,
-        data_raw,
-        header_json_url,
-        data_json_url,
-    } = response.raw;
-
-    // Use BmsTableHeader's name as directory name (via sanitize)
-    let dir_name = sanitize_filename(&format!(
-        "[{}] {}",
-        header_json_url.domain().unwrap_or("unknown.domain"),
-        header.name
-    ));
-    let out_dir = base_dir.join(&dir_name);
-
-    // If the table existed under a different directory name (e.g. remote name changed),
-    // rename the old directory to the new name before writing.
-    maybe_rename_old_dir(base_dir, &dir_name, old_dir_name).await?;
-
-    // Patch header to point to "./data.json" instead of original data_url.
-    // Locates "data_url" key and its JSON string value via safe methods
-    // (.find, .get, .bytes().position(), .char_indices()) so it works even
-    // when the serializer escapes "/" as "\/" (plain string matching of
-    // the parsed value would fail in that case).
-    let patched_header = {
-        let mut result = header_raw.clone();
-        let key_len = br#""data_url""#.len();
-
-        if let Some(key_pos) = header_raw.find(r#""data_url""#)
-            && let Some(tail) = header_raw.get(key_pos + key_len..)
-            && let Some(colon) = tail.bytes().position(|b| b == b':')
-            && let Some(after_colon) = header_raw.get(key_pos + key_len + colon + 1..)
-            && let Some(quote) = after_colon.bytes().position(|b| b == b'"')
-            && let Some(content) = header_raw.get(key_pos + key_len + colon + 1 + quote + 1..)
-        {
-            let content_start = key_pos + key_len + colon + 1 + quote + 1;
-
-            // find unescaped closing quote via char iteration
-            let mut content_end = None;
-            let mut chars = content.char_indices();
-            while let Some((off, ch)) = chars.next() {
-                if ch == '\\' {
-                    chars.next(); // skip escaped character
-                    continue;
-                }
-                if ch == '"' {
-                    content_end = Some(off);
-                    break;
-                }
-            }
-
-            if let Some(end) = content_end {
-                result.replace_range(content_start..content_start + end, "./data.json");
-            }
-        }
-
-        result
-    };
-
-    fs::create_dir_all(&out_dir).await?;
-    let header_path: PathBuf = out_dir.join("header.json");
-    let data_path = out_dir.join("data.json");
-
-    // Conditional write for header
-    if is_changed::<BmsTableHeader>(&header_path, &patched_header, |header| {
-        header.extra = BTreeMap::default();
-    })
-    .await?
-    {
-        let header_to_write = match serde_json::from_str::<BmsTableHeader>(&patched_header) {
-            Ok(_) => patched_header,
-            Err(_) => serde_json::to_string_pretty(&header)?,
-        };
-        fs::write(&header_path, &header_to_write).await?;
-    }
-
-    // Conditional write for data
-    if is_changed::<BmsTableData>(&data_path, &data_raw, |data| {
-        data.charts
-            .iter_mut()
-            .for_each(|v| v.extra = BTreeMap::default());
-    })
-    .await?
-    {
-        let data_to_write = match serde_json::from_str::<BmsTableData>(&data_raw) {
-            Ok(_) => data_raw,
-            Err(_) => serde_json::to_string_pretty(&data)?,
-        };
-        fs::write(&data_path, &data_to_write).await?;
-    }
-
-    // Sync actual header info back to info struct
-    info.name = header.name;
-    info.symbol = header.symbol;
-
-    // Write URL sources into extra
-    *info.extra.entry("url_header_json".to_string()).or_default() =
-        serde_json::to_value(header_json_url)?;
-    *info.extra.entry("url_data_json".to_string()).or_default() =
-        serde_json::to_value(data_json_url)?;
-
-    // Write info.json
-    let info_path: PathBuf = out_dir.join("info.json");
-    let info_data = serde_json::to_string_pretty(&info)?;
-    if is_changed::<Value>(&info_path, &info_data, deep_sort_json_value).await? {
-        fs::write(&info_path, &info_data).await?;
-    }
-
-    Ok(())
-}
-
-/// If the table existed under a different directory name previously (e.g., remote header name
-/// changed), rename the old directory to the new name. If both old and new directories exist,
-/// the stale old directory is removed.
-async fn maybe_rename_old_dir(
-    base_dir: &Path,
-    new_dir_name: &str,
-    old_dir_name: Option<String>,
-) -> Result<()> {
-    let Some(ref old_name) = old_dir_name else {
-        return Ok(());
-    };
-    if old_name == new_dir_name {
-        return Ok(());
-    }
-
-    let old_path = base_dir.join(old_name);
-    if !old_path.exists() {
-        return Ok(());
-    }
-
-    let new_path = base_dir.join(new_dir_name);
-    if new_path.exists() {
-        warn!("Removing stale directory {old_name} after name change (new: {new_dir_name})");
-        fs::remove_dir_all(&old_path).await?;
-    } else {
-        info!("Renaming directory {old_name} -> {new_dir_name} (table name changed)");
-        fs::rename(&old_path, &new_path).await?;
-    }
-
-    Ok(())
 }

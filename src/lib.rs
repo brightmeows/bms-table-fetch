@@ -9,3 +9,5 @@ pub mod config;
 pub mod filesystem;
 /// Logger initialization.
 pub mod logger;
+/// Unified sync engine orchestrator for the default pipeline.
+pub mod sync;
