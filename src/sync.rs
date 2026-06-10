@@ -423,6 +423,9 @@ impl SyncEngine {
         list_result?;
         index_result?;
 
+        // Step 4e: compute and write sync state (SHA3-256 hashes for audit)
+        crate::state::compute_and_write_state(&self.table_dir, active_urls, &scan).await?;
+
         Ok(())
     }
 

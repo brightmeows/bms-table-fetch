@@ -9,5 +9,8 @@ pub mod config;
 pub mod filesystem;
 /// Logger initialization.
 pub mod logger;
+/// Sync state tracking — records per-table SHA3-256 hashes and timestamps
+/// to `tables/state.toml` for change audit.
+pub mod state;
 /// Unified sync engine orchestrator for the default pipeline.
 pub mod sync;

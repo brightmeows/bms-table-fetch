@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
                 "lists".into(),
                 "tables".into(),
                 "indexes".into(),
-                vec![],   // list_names
+                vec![], // list_names
             )?
             .run()
             .await?;
