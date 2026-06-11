@@ -4,11 +4,19 @@
 
 ## 命令
 
+### Pre-commit（提交时自动触发）
+
+```sh
+pre-commit run --all-files --quiet    # 手动触发全部 hooks
+```
+
+Hooks：`cargo fmt --check`、`cargo clippy --quiet`、`cargo doc --no-deps --quiet`、no-comment-decorations、no-confusable-unicode。
+
+### CI / 手动
+
 ```sh
 cargo build --release
 cargo test
-cargo clippy -- -D warnings    # lint 规则见 Cargo.toml [lints] 和 clippy.toml
-cargo fmt
 cargo deny check               # 许可证见 deny.toml
 ```
 
