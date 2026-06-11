@@ -64,11 +64,11 @@ tables/*/                     → tables/state.toml
 - **目录名**——须经 `sanitize_filename` 处理，确保跨平台合法；rename 后 `tables.json` 中的 `dir_name` 自动更新
 - **`_orphaned` 是保留名**——所有命令扫描时跳过此目录，不可用作表名
 - **`tables/state.toml`**——`post_process` 末尾写入，记录全局同步时间、每个 active 表的 SHA3-256 哈希（`info.json` / `header.json` / `data.json`）和检查/变化时间戳。因时间戳始终更新，不使用 `is_changed` 跳过，直接原子写入
-- **`publish = false`**——不发布到 crates.io（见 `release-plz.toml`）
+- **`publish = false`**——不发布到 crates.io（见 `Cargo.toml`）
 
 ## Git 工作流
 
-Conventional Commits：`feat:` / `fix:` / `refactor:` / `ci:` 等（分组定义见 `release-plz.toml` commit_parsers）。release-plz 自动发版。
+Conventional Commits：`feat:` / `fix:` / `refactor:` / `ci:` 等。
 
 ## 生成目录
 
