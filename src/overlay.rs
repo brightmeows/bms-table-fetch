@@ -40,7 +40,7 @@ pub struct ActiveSet {
 )]
 pub async fn build_active_set(
     base_info_map: BTreeMap<Url, BmsTableInfo>,
-    old_dir_map: HashMap<Url, String>,
+    mut old_dir_map: HashMap<Url, String>,
     list_dir: &Path,
     list_names: &[String],
     config_path: &Path,
@@ -56,7 +56,7 @@ pub async fn build_active_set(
 
     // Apply config rules (add/replace/disable)
     if let Ok(cfg) = table_config::load_table_config(config_path).await {
-        apply_config(&mut table_info_map, &cfg, Some(&mut old_dir_map.clone()));
+        apply_config(&mut table_info_map, &cfg, Some(&mut old_dir_map));
     }
 
     let active_urls: HashSet<Url> = table_info_map.keys().cloned().collect();
