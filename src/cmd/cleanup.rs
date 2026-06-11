@@ -3,12 +3,14 @@
 //! A directory is considered orphaned if its URL (from `info.json`) is not in the
 //! current set of active tables, determined by loading list files and config rules.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use log::info;
+use url::Url;
 
-use crate::sync::{self, execute_orphans};
+use crate::{orphan, overlay, scan};
 
 /// CLI arguments for the cleanup subcommand.
 #[derive(clap::Args)]
@@ -40,23 +42,32 @@ pub struct Args {
 ///
 /// Returns an error if reading list files or the config fails.
 pub async fn run_cleanup(args: &Args) -> Result<()> {
-    // Build the active set (three-layer overlay)
-    let active = sync::build_active_set(
-        &args.table_dir,
+    // Scan for base layer and old_dir_map
+    let entries = scan::scan_dirs(&args.table_dir).await?;
+    let base_info_map: BTreeMap<Url, bms_table::BmsTableInfo> = entries
+        .iter()
+        .map(|e| (e.info.url.clone(), e.info.clone()))
+        .collect();
+    let old_dir_map = entries
+        .iter()
+        .map(|e| (e.info.url.clone(), e.dir_name.clone()))
+        .collect();
+
+    // Build the active set (base + lists + config)
+    let active = overlay::build_active_set(
+        base_info_map,
+        old_dir_map,
         &args.list_dir,
         &args.list_names,
         &args.config,
     )
     .await?;
 
-    // Scan current table directories
-    let scan = sync::scan_tables(&args.table_dir).await?;
-
     // Determine orphans
-    let orphans = sync::compute_orphans(&scan.entries, &active.active_urls);
+    let orphans = orphan::compute_orphans(&entries, &active.active_urls);
 
     // Execute moves
-    let moved = execute_orphans(&orphans, &args.table_dir).await;
+    let moved = orphan::execute_orphans(&orphans, &args.table_dir).await;
 
     if moved > 0 {
         info!("Moved {moved} orphaned director(ies) to _orphaned/");

@@ -3,15 +3,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use bms_table::{BmsTableInfo, fetch::reqwest::Fetcher};
-use log::info;
-use serde_json::Value;
-use tokio::fs;
 
-use crate::{
-    config::list::load_list_config,
-    filesystem::{deep_sort_json_value, is_changed},
-};
+use crate::config::list::load_list_config;
+use crate::fetch::fetch_list_sources;
 
 /// CLI arguments for the list subcommand.
 #[derive(clap::Args)]
@@ -27,36 +21,12 @@ pub struct Args {
 
 /// Fetch table lists from configured sources and save as unified JSON.
 ///
+/// On individual source failure, logs a warning and preserves cached files.
+///
 /// # Errors
 ///
-/// Returns an error if fetching table lists or writing to disk fails.
+/// Returns an error if reading the list config fails.
 pub async fn run_list(args: &Args) -> Result<()> {
     let config = load_list_config(&args.config).await?;
-
-    let lists_dir = &args.output_dir;
-    fs::create_dir_all(lists_dir).await?;
-
-    let fetcher = Fetcher::lenient()?;
-
-    for idx in &config.source {
-        info!("Fetching table list from: {} ({})", idx.name, idx.url);
-        let fetched_list = fetcher.fetch_table_list(idx.url.as_str()).await?;
-        let infos: Vec<BmsTableInfo> = fetched_list.tables;
-        let serialized = serde_json::to_string_pretty(&infos)?;
-
-        let file_path = lists_dir.join(format!("{}.json", idx.name));
-        if is_changed::<Value>(&file_path, &serialized, deep_sort_json_value).await? {
-            fs::write(&file_path, &serialized).await?;
-            info!("Saved {} tables from {}", infos.len(), idx.name);
-        } else {
-            info!(
-                "{} tables from {} unchanged — skipping write",
-                infos.len(),
-                idx.name
-            );
-        }
-    }
-
-    info!("List fetch completed.");
-    Ok(())
+    fetch_list_sources(&config.source, &args.output_dir).await
 }

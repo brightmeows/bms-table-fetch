@@ -2,15 +2,14 @@
 //!
 //! Scans all table directories and renames any whose name doesn't match
 //! the `[domain] sanitize(name)` pattern derived from its `info.json`.
-//!
-//! Uses shared scan + pure computation from `sync` module.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use log::info;
 
-use crate::sync::{self, execute_renames};
+use crate::rename;
+use crate::scan;
 
 /// CLI arguments for the reconcile subcommand.
 #[derive(clap::Args)]
@@ -22,14 +21,17 @@ pub struct Args {
 
 /// Fix directory name mismatches with table info.
 ///
+/// Uses the disk `info.json` for each directory to compute the expected name.
+/// No overlaid (list/config) info is applied — this is a direct disk-based fix.
+///
 /// # Errors
 ///
 /// Returns an error if reading directories fails unexpectedly.
 pub async fn run_reconcile(args: &Args) -> Result<()> {
-    let scan = sync::scan_tables(&args.table_dir).await?;
-    let renames = sync::compute_renames(&scan.entries);
+    let entries = scan::scan_dirs(&args.table_dir).await?;
+    let renames = rename::compute_renames(&entries, None::<&std::collections::BTreeMap<_, _>>);
 
-    let executed = execute_renames(&renames, &args.table_dir).await;
+    let executed = rename::execute_renames(&renames, &args.table_dir).await;
 
     if executed.is_empty() {
         info!("All directory names are consistent — no rename needed");

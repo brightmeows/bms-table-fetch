@@ -13,7 +13,7 @@ use tokio::fs;
 use url::Url;
 
 use crate::filesystem::write_atomic;
-use crate::sync::TableScanResult;
+use crate::scan::FullDirEntry;
 
 /// A SHA3-256 hash stored as raw bytes, serialized as a lowercase hex string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,7 +154,7 @@ async fn try_read_string(path: &Path) -> Option<String> {
 pub async fn compute_and_write_state(
     table_dir: &Path,
     active_urls: &HashSet<Url>,
-    scan: &TableScanResult,
+    entries: &[FullDirEntry],
 ) -> Result<()> {
     let path = table_dir.join("state.toml");
 
@@ -167,7 +167,7 @@ pub async fn compute_and_write_state(
     let now = Utc::now();
     let mut tables = BTreeMap::new();
 
-    for entry in &scan.entries {
+    for entry in entries {
         if !active_urls.contains(&entry.info.url) {
             continue;
         }
@@ -234,7 +234,7 @@ mod tests {
 
     use url::Url;
 
-    use crate::sync::TableDirEntry;
+    use crate::scan::FullDirEntry;
 
     use super::*;
 
@@ -255,14 +255,14 @@ mod tests {
         write_atomic(&path, content).await.unwrap();
     }
 
-    /// Create a table directory with three files, returning a `TableDirEntry`.
+    /// Create a table directory with three files, returning a `FullDirEntry`.
     async fn create_table_dir(
         base: &Path,
         dir_name: &str,
         info: &str,
         header: &str,
         data: &str,
-    ) -> TableDirEntry {
+    ) -> FullDirEntry {
         let dir = base.join(dir_name);
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -270,7 +270,7 @@ mod tests {
         write_test_file(&dir, "header.json", header).await;
         write_test_file(&dir, "data.json", data).await;
 
-        TableDirEntry {
+        FullDirEntry {
             dir_name: dir_name.to_string(),
             info: make_info(&format!("https://example.com/{dir_name}")),
             data_raw: Some(data.to_string()),
@@ -299,16 +299,15 @@ mod tests {
 
         let url_str = test_url("foo");
         let entry = create_table_dir(&dir, "foo", r#"{"v":1}"#, r"[]", r"{}").await;
-        let scan = TableScanResult {
-            entries: vec![entry],
-        };
         let active = {
             let mut s = HashSet::new();
             s.insert(Url::parse(&url_str).unwrap());
             s
         };
 
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &[entry])
+            .await
+            .unwrap();
 
         let state = read_state(&dir).await;
         assert_eq!(state.tables.len(), 1);
@@ -330,9 +329,7 @@ mod tests {
 
         let url_str = test_url("bar");
         let entry = create_table_dir(&dir, "bar", r#"{"k":"a"}"#, r"[]", r"{}").await;
-        let scan = TableScanResult {
-            entries: vec![entry],
-        };
+        let entries = [entry];
         let active = {
             let mut s = HashSet::new();
             s.insert(Url::parse(&url_str).unwrap());
@@ -340,7 +337,9 @@ mod tests {
         };
 
         // First run
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &entries)
+            .await
+            .unwrap();
         let state1 = read_state(&dir).await;
         let ts1 = state1.tables.get(&url_str).unwrap();
 
@@ -348,7 +347,9 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
 
         // Second run — same content, last_change should be preserved
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &entries)
+            .await
+            .unwrap();
         let state2 = read_state(&dir).await;
         let ts2 = state2.tables.get(&url_str).unwrap();
 
@@ -357,14 +358,13 @@ mod tests {
 
         // Third run — change info.json content
         let entry = create_table_dir(&dir, "bar", r#"{"k":"b"}"#, r"[]", r"{}").await;
-        let scan = TableScanResult {
-            entries: vec![entry],
-        };
 
         // Small delay to ensure timestamp advances
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &[entry])
+            .await
+            .unwrap();
         let state3 = read_state(&dir).await;
         let ts3 = state3.tables.get(&url_str).unwrap();
 
@@ -382,13 +382,12 @@ mod tests {
         let url_active = test_url("active");
         let entry = create_table_dir(&dir, "active", r"{}", r"[]", r"{}").await;
         let entry2 = create_table_dir(&dir, "inactive", r"{}", r"[]", r"{}").await;
-        let scan = TableScanResult {
-            entries: vec![entry, entry2],
-        };
         let mut active = HashSet::new();
         active.insert(Url::parse(&url_active).unwrap());
 
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &[entry, entry2])
+            .await
+            .unwrap();
 
         let state = read_state(&dir).await;
         assert_eq!(state.tables.len(), 1);
@@ -414,7 +413,7 @@ mod tests {
         // Also create a complete one
         let entry2 = create_table_dir(&dir, "complete", r"{}", r"[]", r"{}").await;
 
-        let entry1 = TableDirEntry {
+        let entry1 = FullDirEntry {
             dir_name: "partial".to_string(),
             info: make_info(&url_partial),
             // `compute_and_write_state` does not read `data_raw`;
@@ -422,14 +421,13 @@ mod tests {
             data_raw: None,
         };
 
-        let scan = TableScanResult {
-            entries: vec![entry1, entry2],
-        };
         let mut active = HashSet::new();
         active.insert(Url::parse(&url_partial).unwrap());
         active.insert(Url::parse(&url_complete).unwrap());
 
-        compute_and_write_state(&dir, &active, &scan).await.unwrap();
+        compute_and_write_state(&dir, &active, &[entry1, entry2])
+            .await
+            .unwrap();
 
         let state = read_state(&dir).await;
         assert_eq!(state.tables.len(), 1);

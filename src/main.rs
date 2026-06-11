@@ -7,7 +7,7 @@ use bms_table_fetch::{
         reconcile::Args as ReconcileArgs, tables::Args as TablesArgs,
         tables_list::Args as TablesListArgs,
     },
-    sync::SyncEngine,
+    engine::SyncEngine,
 };
 use clap::{Parser, Subcommand};
 use log::info;

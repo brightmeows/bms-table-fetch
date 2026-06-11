@@ -3,10 +3,8 @@
 //! This is the reverse of the list → tables flow: instead of consuming a list
 //! to fetch tables, it reads the actual `info.json` from every fetched table
 //! directory and writes them all as a single JSON array (same format as list files).
-//!
-//! Uses shared scan from `sync` module.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use bms_table::BmsTableInfo;
@@ -15,10 +13,8 @@ use serde_json::Value;
 use tokio::fs;
 use url::Url;
 
-use crate::{
-    filesystem::{deep_sort_json_value, is_changed, write_atomic},
-    sync,
-};
+use crate::filesystem::{deep_sort_json_value, is_changed, write_atomic};
+use crate::scan;
 
 /// CLI arguments for the tables-list subcommand.
 #[derive(clap::Args)]
@@ -42,10 +38,9 @@ pub struct Args {
 ///
 /// Returns an error if writing the output file fails.
 pub async fn run_tables_list(args: &Args) -> Result<()> {
-    let scan = sync::scan_tables(&args.table_dir).await?;
+    let entries = scan::scan_dirs_full(&args.table_dir).await?;
 
-    let table_infos: Vec<BmsTableInfo> = scan
-        .entries
+    let table_infos: Vec<BmsTableInfo> = entries
         .into_iter()
         .map(|e| {
             let mut info = e.info;
@@ -127,6 +122,8 @@ struct TableDiff {
 /// Entries are identified by their URL. An entry is considered modified if any field
 /// (including `extra`) differs between the old and new version.
 fn compute_table_diff(old: &[BmsTableInfo], new: &[BmsTableInfo]) -> TableDiff {
+    use std::collections::BTreeMap;
+
     let old_by_url: BTreeMap<&Url, &BmsTableInfo> = old.iter().map(|e| (&e.url, e)).collect();
     let new_by_url: BTreeMap<&Url, &BmsTableInfo> = new.iter().map(|e| (&e.url, e)).collect();
 
