@@ -1,7 +1,3 @@
-[[package]]
-name = "bms-table-fetch"
-publish = false
-
 [workspace]
 # Repository URL for changelog links and PR creation.
 # Auto-detected from git remote; explicit for safety.
@@ -14,12 +10,6 @@ semver_check = true
 
 # Generate per-crate CHANGELOG.md on each release PR.
 changelog_update = true
-
-# Use git tags (not crates.io) as the source of truth for released versions.
-# Without this, `publish = false` causes a deadlock where release-plz refuses
-# to create new PRs because the tag exists but the package was never published
-# to crates.io (see release-plz#1139).
-git_only = true
 
 [changelog]
 # Group conventional commits into descriptive sections.
