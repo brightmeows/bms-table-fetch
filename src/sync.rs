@@ -6,7 +6,7 @@
 //!
 //! 1. **list** — fetch remote table lists → `lists/*.json`
 //! 2. **overlay** — scan `tables/`, rename misnamed directories, then compute
-//!    active table set (base + lists + config) → [`ActiveSet`]
+//!    active table set (base + lists + config) → [`ActiveSet`](crate::sync::ActiveSet)
 //! 3. **fetch** — concurrently fetch all active tables, write to `tables/*/`
 //! 4. **post_process** — second `read_dir` scan of `tables/` (first scan happens
 //!    during Phase 2 overlay); reconcile (safety net), cleanup, generate `tables/tables.json`
@@ -113,6 +113,71 @@ pub fn compute_renames(entries: &[TableDirEntry]) -> Vec<RenameAction> {
 
         if entry.dir_name != expected {
             // Paths are relative to base_dir; caller prepends the table root.
+            actions.push(RenameAction {
+                old_path: PathBuf::from(&entry.dir_name),
+                new_path: PathBuf::from(&expected),
+            });
+        }
+    }
+
+    actions
+}
+
+/// Compute the expected directory name from the (overlaid) table info, before the HTTP fetch.
+///
+/// Domain priority: `info.extra.url_header_json` → parse `[domain]` from `old_dir_name`
+/// → `"unknown.domain"`.
+#[must_use]
+pub fn compute_prefetch_dir_name(info: &BmsTableInfo, old_dir_name: Option<&str>) -> String {
+    let domain: String = info
+        .extra
+        .get("url_header_json")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Url::parse(s).ok())
+        .and_then(|u| u.domain().map(String::from))
+        .or_else(|| {
+            old_dir_name
+                .and_then(|n| n.strip_prefix('['))
+                .and_then(|s| s.split_once(']'))
+                .map(|(d, _)| d.to_string())
+        })
+        .unwrap_or_else(|| "unknown.domain".to_string());
+
+    sanitize_filename(&format!("[{domain}] {}", info.name))
+}
+
+/// Like [`compute_renames`] but uses overlaid info from `ActiveSet` for active tables.
+///
+/// This prevents `post_process` from undoing pre-fetch renames that were based on
+/// overlaid (list + config) information rather than the (potentially stale) disk info.json.
+#[must_use]
+pub fn compute_renames_overlaid(
+    entries: &[TableDirEntry],
+    overlaid_info: &BTreeMap<Url, BmsTableInfo>,
+) -> Vec<RenameAction> {
+    let mut actions = Vec::new();
+
+    for entry in entries {
+        let info = overlaid_info.get(&entry.info.url).unwrap_or(&entry.info);
+
+        let domain: String = info
+            .extra
+            .get("url_header_json")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .and_then(|u| u.domain().map(String::from))
+            .or_else(|| {
+                entry
+                    .dir_name
+                    .strip_prefix('[')
+                    .and_then(|s| s.split_once(']'))
+                    .map(|(d, _)| d.to_string())
+            })
+            .unwrap_or_else(|| "unknown.domain".to_string());
+
+        let expected = sanitize_filename(&format!("[{domain}] {}", info.name));
+
+        if entry.dir_name != expected {
             actions.push(RenameAction {
                 old_path: PathBuf::from(&entry.dir_name),
                 new_path: PathBuf::from(&expected),
@@ -328,7 +393,10 @@ impl SyncEngine {
 
         // ── Scan: discover existing table directories ──────────────
         let mut scan = scan_tables(&self.table_dir).await?;
-        info!("Scanned {} table directories for overlay", scan.entries.len());
+        info!(
+            "Scanned {} table directories for overlay",
+            scan.entries.len()
+        );
 
         // ── Rename misnamed directories before fetch ───────────────
         // This ensures that fetch writes to correctly named directories,
@@ -448,7 +516,9 @@ impl SyncEngine {
         let active_urls = &active.active_urls;
 
         // Step 4b: reconcile (rename directories in place)
-        let renames = compute_renames(&scan.entries);
+        // Use overlaid info for active tables to avoid undoing pre-fetch renames
+        // that were based on list/config information rather than stale disk info.json.
+        let renames = compute_renames_overlaid(&scan.entries, &active.table_info_map);
         let executed = execute_renames(&renames, &self.table_dir).await;
         info!("Reconciled {} directory name(s)", executed.len());
 
@@ -616,6 +686,13 @@ pub(crate) async fn fetch_and_save_table(
     base_dir: &Path,
     old_dir_name: Option<String>,
 ) -> Result<()> {
+    // ── Phase 1: Pre-fetch rename using overlaid info ────────────────────
+    // This runs before the HTTP request so that the directory is renamed
+    // even if the fetch fails (e.g. network error, server down).
+    let pre_dir_name = compute_prefetch_dir_name(&info, old_dir_name.as_deref());
+    maybe_rename_old_dir(base_dir, &pre_dir_name, old_dir_name).await?;
+
+    // ── Phase 2: HTTP fetch ─────────────────────────────────────────────
     let response = fetcher.fetch_table(info.url.as_str()).await?;
     let bms_table::BmsTable { header, data } = response.table;
     let BmsTableRaw {
@@ -625,14 +702,23 @@ pub(crate) async fn fetch_and_save_table(
         data_json_url,
     } = response.raw;
 
+    // ── Phase 3: Compute response-based directory name ──────────────────
     let dir_name = sanitize_filename(&format!(
         "[{}] {}",
         header_json_url.domain().unwrap_or("unknown.domain"),
         header.name
     ));
-    let out_dir = base_dir.join(&dir_name);
 
-    maybe_rename_old_dir(base_dir, &dir_name, old_dir_name).await?;
+    // If the response-based name differs from the pre-fetch name, rename again.
+    // This handles the case where the server's current header.name or domain
+    // differs from what the overlay info predicted.
+    let final_dir_name = if dir_name == pre_dir_name {
+        pre_dir_name
+    } else {
+        maybe_rename_old_dir(base_dir, &dir_name, Some(pre_dir_name)).await?;
+        dir_name
+    };
+    let out_dir = base_dir.join(&final_dir_name);
 
     let patched_header = patch_data_url(&header_raw);
 
