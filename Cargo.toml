@@ -1,6 +1,7 @@
 [package]
 name = "bms-table-fetch"
 version = "0.3.0"
+publish = false
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://github.com/MiyakoMeow/bms-table-mirror"
