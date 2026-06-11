@@ -23,9 +23,9 @@ list → overlay → fetch → post_process
 各阶段职责：
 
 1. **list** — 拉取远程列表写入 `lists/*.json`（同 `list` 子命令）
-2. **overlay** — 一次性计算三层叠加（base + lists + config），确定 active 表集合
+2. **overlay** — 扫描 `tables/` 读取 `info.json`，检查目录名并立即重命名，再计算三层叠加（base + lists + config），确定 active 表集合
 3. **fetch** — 并发抓取所有 active 表（无并发上限——预期行为），写入 `tables/*/`
-4. **post_process** — 第二次扫描 `tables/`，顺序执行：rename 目录 → 移 orphan → 并行写 `tables/tables.json` + `indexes/*.json` → 写 `tables/state.toml`（审计记录）
+4. **post_process** — 第二次扫描 `tables/`，顺序执行：rename 目录（安全网）→ 移 orphan → 并行写 `tables/tables.json` + `indexes/*.json` → 写 `tables/state.toml`（审计记录）
 
 数据流向：
 
@@ -58,9 +58,9 @@ tables/*/                     → tables/state.toml
 - **全异步 IO**——`clippy.toml` 禁用 `std::fs::*` 和 `std::thread::spawn`，必须用 `tokio::fs` / `tokio::spawn`
 - **条件写入**——写文件前用 `filesystem::is_changed` 检测，跳过无变化的写入（带字节比较快速路径，内容相同不解析 JSON）
 - **原子写入**——`filesystem::write_atomic` 先写 `.tmp` 再 `rename` 覆盖，崩溃不损坏目标文件
-- **`tables/` 扫描仅 2 次**——默认流水线中只在 overlay（读 `info.json` 做 base 层）和 post_process（读 `info.json` + `data.json`，另读 `header.json` 用于 state.toml）时各扫描一次，不自发额外扫描
+- **`tables/` 扫描仅 2 次**——默认流水线中只在 overlay（扫描目录并重命名，读 `info.json` + 可选 `data.json`）和 post_process（读 `info.json` + `data.json`，另读 `header.json` 用于 state.toml）时各扫描一次，不自发额外扫描
 - **并发抓取无限制**——`fetch` 阶段所有表同时发起 HTTP 请求（通过 `JoinSet`），不设并发上限。这是预期行为/项目决策
-- **reconcile 默认流水线中不做**——rename 在 `post_process` 中内联处理（`sync::compute_renames` + `execute_renames`）。`reconcile` 子命令仅手动调用时使用
+- **reconcile 默认流水线中不做**——rename 在 `post_process` 中内联处理（`sync::compute_renames` + `execute_renames`），同时 overlay 阶段也做一次预重命名确保 fetch 写入正确命名的目录。`reconcile` 子命令仅手动调用时使用
 - **目录名**——须经 `sanitize_filename` 处理，确保跨平台合法；rename 后 `tables.json` 中的 `dir_name` 自动更新
 - **`_orphaned` 是保留名**——所有命令扫描时跳过此目录，不可用作表名
 - **`tables/state.toml`**——`post_process` 末尾写入，记录全局同步时间、每个 active 表的 SHA3-256 哈希（`info.json` / `header.json` / `data.json`）和检查/变化时间戳。因时间戳始终更新，不使用 `is_changed` 跳过，直接原子写入

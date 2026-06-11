@@ -5,10 +5,11 @@
 //! The default pipeline (no subcommand) runs in four phases:
 //!
 //! 1. **list** — fetch remote table lists → `lists/*.json`
-//! 2. **overlay** — compute active table set (base + lists + config) → [`ActiveSet`]
+//! 2. **overlay** — scan `tables/`, rename misnamed directories, then compute
+//!    active table set (base + lists + config) → [`ActiveSet`]
 //! 3. **fetch** — concurrently fetch all active tables, write to `tables/*/`
 //! 4. **post_process** — second `read_dir` scan of `tables/` (first scan happens
-//!    during Phase 2 overlay); reconcile, cleanup, generate `tables/tables.json`
+//!    during Phase 2 overlay); reconcile (safety net), cleanup, generate `tables/tables.json`
 //!    and `indexes/*.json` in parallel
 //!
 //! Standalone subcommands also use the pure computation functions defined here.
@@ -306,22 +307,82 @@ impl SyncEngine {
 
     /// Phase 2: compute the active table set (three-layer overlay).
     ///
+    /// Scans `tables/` to discover existing tables (reading each `info.json`),
+    /// renames any misnamed directories *before* building the active set, then
+    /// applies the list overlay and config rules to produce the final set.
+    ///
     /// Also cleans any stale `.tmp` files from previous runs.
     ///
     /// # Errors
     ///
     /// Returns an error if reading the table directory, list files, or config fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a successfully renamed directory's new path is not a valid
+    /// file name (should never happen — all directory names come from
+    /// `sanitize_filename`).
     pub async fn build_active_set(&self) -> Result<ActiveSet> {
         // Clean any stale .tmp files before starting
         clean_tmp_files(&self.table_dir).await.ok();
 
-        build_active_set(
-            &self.table_dir,
-            &self.list_dir,
-            &self.list_names,
-            &self.table_config_path,
-        )
-        .await
+        // ── Scan: discover existing table directories ──────────────
+        let mut scan = scan_tables(&self.table_dir).await?;
+        info!("Scanned {} table directories for overlay", scan.entries.len());
+
+        // ── Rename misnamed directories before fetch ───────────────
+        // This ensures that fetch writes to correctly named directories,
+        // rather than fixing names only during post_process.
+        let renames = compute_renames(&scan.entries);
+        let executed = execute_renames(&renames, &self.table_dir).await;
+        if !executed.is_empty() {
+            info!(
+                "Renamed {} misnamed director(ies) before fetch",
+                executed.len()
+            );
+        }
+
+        // Update dir_names in scan entries to reflect executed renames
+        for entry in &mut scan.entries {
+            if let Some(rename) = executed
+                .iter()
+                .find(|r| r.old_path == Path::new(&entry.dir_name))
+            {
+                entry.dir_name = rename
+                    .new_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("rename new_path is always a plain file name")
+                    .to_string();
+            }
+        }
+
+        // ── Build base layer from (now correctly named) scan ──────
+        let mut table_info_map: BTreeMap<Url, BmsTableInfo> = BTreeMap::new();
+        let mut old_dir_map: HashMap<Url, String> = HashMap::new();
+        for entry in &scan.entries {
+            old_dir_map.insert(entry.info.url.clone(), entry.dir_name.clone());
+            table_info_map.insert(entry.info.url.clone(), entry.info.clone());
+        }
+
+        // ── Overlay lists and config (same logic as free function) ─
+        let list_map = tables::load_list_files(&self.list_dir, &self.list_names).await?;
+        if !list_map.is_empty() {
+            table_info_map.extend(list_map);
+        }
+
+        if let Ok(cfg) = load_table_config(&self.table_config_path).await {
+            tables::apply_config(&mut table_info_map, &cfg, Some(&mut old_dir_map));
+        }
+
+        let active_urls: HashSet<Url> = table_info_map.keys().cloned().collect();
+        info!("Active tables after overlay: {}", active_urls.len());
+
+        Ok(ActiveSet {
+            active_urls,
+            table_info_map,
+            old_dir_map,
+        })
     }
 
     /// Phase 3: concurrently fetch all active tables.
