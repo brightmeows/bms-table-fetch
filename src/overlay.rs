@@ -143,16 +143,30 @@ pub(crate) fn apply_config(
     config: &TableConfig,
     mut old_dir_map: Option<&mut HashMap<Url, String>>,
 ) {
-    // Add extra tables
+    // Add extra tables (merge with base layer — don't overwrite non-empty fields)
     for item in &config.table {
-        let copied: BmsTableInfo = TableEntry {
+        let url = item.url.clone();
+        let mut info: BmsTableInfo = TableEntry {
             name: item.name.clone(),
             url: item.url.clone(),
             symbol: item.symbol.clone(),
             extra: item.extra.clone(),
         }
         .into();
-        table_info_map.insert(copied.url.clone(), copied);
+
+        if let Some(existing) = table_info_map.get(&url) {
+            if info.name.is_empty() {
+                info.name.clone_from(&existing.name);
+            }
+            if info.symbol.is_empty() {
+                info.symbol.clone_from(&existing.symbol);
+            }
+            for (k, v) in &existing.extra {
+                info.extra.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+
+        table_info_map.insert(url, info);
     }
 
     // Replace specified table URLs

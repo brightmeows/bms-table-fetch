@@ -126,11 +126,11 @@ pub async fn execute_renames(actions: &[RenameAction], base_dir: &Path) -> Vec<R
 ///
 /// If `old_name` is `None` or same as `new_name`, does nothing.
 /// If the old directory doesn't exist, does nothing.
-/// If the new directory already exists, removes the old one (name changed).
+/// If the new directory already exists, skips the rename (no data loss).
 ///
 /// # Errors
 ///
-/// Returns an error if the filesystem rename or removal fails.
+/// Returns an error if the filesystem rename fails.
 pub async fn maybe_rename_dir(
     base_dir: &Path,
     new_name: &str,
@@ -150,12 +150,12 @@ pub async fn maybe_rename_dir(
 
     let new_path = base_dir.join(new_name);
     if fs::try_exists(&new_path).await.unwrap_or(false) {
-        warn!("Removing stale directory {old} after name change (new: {new_name})");
-        fs::remove_dir_all(&old_path).await?;
-    } else {
-        info!("Renaming directory {old} -> {new_name} (table name changed)");
-        fs::rename(&old_path, &new_path).await?;
+        warn!("Cannot rename {old} -> {new_name}: target already exists, skipping");
+        return Ok(());
     }
+
+    info!("Renaming directory {old} -> {new_name} (table name changed)");
+    fs::rename(&old_path, &new_path).await?;
 
     Ok(())
 }
