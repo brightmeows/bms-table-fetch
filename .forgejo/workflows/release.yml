@@ -6,24 +6,23 @@ on:
 jobs:
   build:
     runs-on: codeberg-small
+    container:
+      image: ghcr.io/catthehacker/ubuntu:rust-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         env:
           GIT_DEFAULT_HASH: sha256
 
-      - name: Install Rust Toolchain
-        id: rust
-        uses: https://codeberg.org/brightmeows/rust-toolchain-action@v0.2.0
-
       - name: Rust Cache (cargo registry & build artifacts)
-        uses: actions/cache@v4
+        uses: https://data.forgejo.org/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ steps.rust.outputs.cachekey }}
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
             rust-${{ runner.os }}-
