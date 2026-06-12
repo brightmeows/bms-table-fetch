@@ -30,7 +30,7 @@ pub trait DirInfo {
 /// Compute the expected directory name from table info.
 ///
 /// Domain extraction priority:
-/// 1. `info.extra["url_header_json"]` URL's domain
+/// 1. `info.url`'s domain (the canonical table page URL)
 /// 2. `[domain]` prefix parsed from `fallback_dir_name`
 /// 3. `"unknown.domain"` as last resort
 ///
@@ -38,11 +38,9 @@ pub trait DirInfo {
 #[must_use]
 pub fn expected_dir_name(info: &BmsTableInfo, fallback_dir_name: Option<&str>) -> String {
     let domain: String = info
-        .extra
-        .get("url_header_json")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Url::parse(s).ok())
-        .and_then(|u| u.domain().map(String::from))
+        .url
+        .domain()
+        .map(String::from)
         .or_else(|| {
             fallback_dir_name
                 .and_then(|n| n.strip_prefix('['))

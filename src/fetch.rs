@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::fs;
 
 use crate::config::list::Source;
-use crate::filesystem::{deep_sort_json_value, is_changed, sanitize_filename, write_atomic};
+use crate::filesystem::{deep_sort_json_value, is_changed, write_atomic};
 use crate::rename::{expected_dir_name, maybe_rename_dir};
 
 /// Fetch all list sources and save to `output_dir`.
@@ -88,12 +88,16 @@ pub async fn fetch_and_save_table(
         data_json_url,
     } = response.raw;
 
-    // Phase 3: Compute response-based directory name
-    let dir_name = sanitize_filename(&format!(
-        "[{}] {}",
-        header_json_url.domain().unwrap_or("unknown.domain"),
-        header.name
-    ));
+    // Phase 3: Update info with fetched data
+    info.name = header.name.clone();
+    info.symbol = header.symbol.clone();
+    *info.extra.entry("url_header_json".to_string()).or_default() =
+        serde_json::to_value(header_json_url)?;
+    *info.extra.entry("url_data_json".to_string()).or_default() =
+        serde_json::to_value(data_json_url)?;
+
+    // Phase 4: Compute final directory name from updated info
+    let dir_name = expected_dir_name(&info, Some(&pre_dir_name));
 
     let final_dir_name = if dir_name == pre_dir_name {
         pre_dir_name
@@ -136,14 +140,6 @@ pub async fn fetch_and_save_table(
         };
         write_atomic(&data_path, &data_to_write).await?;
     }
-
-    // Sync header info back
-    info.name = header.name;
-    info.symbol = header.symbol;
-    *info.extra.entry("url_header_json".to_string()).or_default() =
-        serde_json::to_value(header_json_url)?;
-    *info.extra.entry("url_data_json".to_string()).or_default() =
-        serde_json::to_value(data_json_url)?;
 
     // Write info.json
     let info_path = out_dir.join("info.json");

@@ -63,10 +63,10 @@ tables/*/                            → tables/tables.json + indexes/*.json + t
 
 ### 目录重命名
 
-所有重命名通过 `rename::expected_dir_name` 统一计算目录期望名（`[domain] sanitize(name)`）。三个调用点：
+所有重命名通过 `rename::expected_dir_name` 统一计算目录期望名（`[domain] sanitize(name)`）。域名来自 `info.url`（table 的规范页面 URL）。三个调用点：
 
 1. **Overlay 阶段**：`compute_renames(entries, Some(&overlaid_info))` — 用 overlaid info 预重命名，确保 fetch 写入正确目录
-2. **Fetch 阶段**（每张表）：`expected_dir_name(&info)` → HTTP → 响应实际 domain/name → 二次重命名
+2. **Fetch 阶段**（每张表）：预重命名 `expected_dir_name(&info, old_dir)` → HTTP → 更新 info → `expected_dir_name(&info, &pre_dir)` 二次重命名
 3. **Post_process**：`compute_renames(entries, None)` — 以磁盘 info.json 为真相源做安全网重命名，不使用 overlaid info（避免与 fetch 写入的 info.json 不一致导致振荡）
 
 ## 模块结构
