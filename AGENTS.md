@@ -10,7 +10,7 @@
 pre-commit run --all-files --quiet    # 手动触发全部 hooks
 ```
 
-Hooks：`cargo fmt --check`、`cargo clippy --quiet`、`cargo doc --no-deps --quiet`、no-comment-decorations、no-confusable-unicode。
+Hooks：`cargo fmt --check`、`cargo clippy --workspace --quiet`、`cargo doc --workspace --no-deps --quiet`、no-comment-decorations、no-confusable-unicode。
 
 ### CI / 手动
 
