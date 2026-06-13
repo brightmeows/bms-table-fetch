@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: codeberg-small
+    runs-on: codeberg-medium
     container:
       image: ghcr.io/catthehacker/ubuntu:rust-latest
 
