@@ -15,29 +15,16 @@ jobs:
         env:
           GIT_DEFAULT_HASH: sha256
 
-      - name: Rust Cache (cargo registry & build artifacts)
+      - name: Rust Cache (target directory)
         uses: https://data.forgejo.org/actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: target
           key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
             rust-${{ runner.os }}-
 
-      - name: Build and Package Release Binary
-        run: |
-          cargo build --release
-          mkdir -p dist
-          cp target/release/bms-table-fetch dist/
-          tar -cJf "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
-            -C dist bms-table-fetch
-          sha256sum "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
-            > "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz.sha256"
-
-      - name: Upload Release Assets
+      - name: Build, Package & Upload Release Assets
         env:
           FORGEJO_TOKEN: "${{ forge.token }}"
           FORGEJO_API_URL: "${{ forge.api_url }}"
@@ -46,6 +33,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Building release binary ..."
+          cargo build --release
+
+          echo "Packaging release assets ..."
+          mkdir -p dist
+          cp target/release/bms-table-fetch dist/
+          tar -cJf "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
+            -C dist bms-table-fetch
+          sha256sum "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz" \
+            > "dist/bms-table-fetch-${{ forge.ref_name }}-linux-amd64.tar.xz.sha256"
+
+          echo "Uploading release assets ..."
           # URL-encode tag for path (e.g. slashes in tag names)
           TAG_URL=$(echo "$TAG" | sed 's/\//%2F/g')
 
