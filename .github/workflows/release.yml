@@ -1,0 +1,49 @@
+name: Release Build
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache (target directory)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            rust-${{ runner.os }}-
+
+      - name: Build, Package & Upload Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          echo "Building release binary ..."
+          cargo build --release
+
+          echo "Packaging release assets ..."
+          mkdir -p dist
+          cp target/release/bms-table-fetch dist/
+          tar -cJf "dist/bms-table-fetch-${TAG}-linux-amd64.tar.xz" -C dist bms-table-fetch
+          sha256sum "dist/bms-table-fetch-${TAG}-linux-amd64.tar.xz" \
+            > "dist/bms-table-fetch-${TAG}-linux-amd64.tar.xz.sha256"
+
+          echo "Uploading release assets ..."
+          gh release upload "$TAG" dist/*.tar.xz dist/*.sha256 --clobber
+
+          echo "All assets uploaded successfully"

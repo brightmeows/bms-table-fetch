@@ -1,0 +1,33 @@
+name: Mirror to Codeberg
+on:
+  workflow_dispatch:
+  push:
+    branches: "main"
+  schedule:
+    # 每日兜底重推：GITHUB_TOKEN 完成的推送不触发本 workflow，
+    # 由本 cron 收敛潜在漂移
+    - cron: "10 6 * * *"
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.CODEBERG_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+
+      - name: Push main and tags to Codeberg
+        run: |
+          git remote add codeberg git@codeberg.org:brightmeows/bms-table-fetch.git
+          git push codeberg main
+          git push codeberg --tags
